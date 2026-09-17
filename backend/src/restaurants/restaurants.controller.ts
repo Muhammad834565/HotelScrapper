@@ -1,10 +1,10 @@
-import { Controller, Post, Get, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Get, Body, Query, HttpCode, HttpStatus } from '@nestjs/common';
 import { RestaurantsService } from './restaurants.service';
 import { SearchLocationDto } from './dto/search-location.dto';
 
 @Controller('restaurants')
 export class RestaurantsController {
-  constructor(private readonly restaurantsService: RestaurantsService) {}
+  constructor(private readonly restaurantsService: RestaurantsService) { }
 
   @Post('nearby')
   @HttpCode(HttpStatus.OK)
@@ -15,5 +15,10 @@ export class RestaurantsController {
   @Get('history')
   async getHistory() {
     return this.restaurantsService.getSearchHistory();
+  }
+
+  @Get('geocode')
+  async geocode(@Query('q') query: string) {
+    return this.restaurantsService.geocodeLocation(query);
   }
 }

@@ -260,4 +260,28 @@ export class RestaurantsService {
       return [];
     }
   }
+
+  async geocodeLocation(query: string): Promise<any[]> {
+    if (!query || query.trim().length < 2) return [];
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(query)}&limit=10&accept-language=en`;
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': 'HotelRestaurantScraperBackend/1.0 (contact@hotelscraper.local)',
+        },
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      if (!Array.isArray(data)) return [];
+      return data.map((item: any) => ({
+        displayName: item.display_name,
+        latitude: parseFloat(item.lat),
+        longitude: parseFloat(item.lon),
+        type: item.type || item.addresstype || 'place',
+      }));
+    } catch (err) {
+      this.logger.warn(`Server geocoding failed: ${err.message}`);
+      return [];
+    }
+  }
 }

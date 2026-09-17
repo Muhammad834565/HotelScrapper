@@ -128,7 +128,7 @@ export class GoogleMapsScraperService {
               'Accept': 'application/json',
               'User-Agent': 'HotelRestaurantScraper/1.0',
             },
-            timeout: 18000,
+            timeout: 4000,
           }
         );
 
@@ -212,75 +212,66 @@ export class GoogleMapsScraperService {
   async fetchNominatimRestaurants(latitude: number, longitude: number, limit: number = 50): Promise<ScrapedRestaurant[]> {
     this.logger.log(`📍 Querying Nominatim REST API for Lat: ${latitude}, Lng: ${longitude}`);
     const results: ScrapedRestaurant[] = [];
-    // Expanded keyword list — includes Pakistani street food and South Asian local terms
-    const keywords = [
-      'restaurant', 'hotel', 'cafe', 'food court', 'fast food',
-      'chai', 'dhaba', 'roti', 'paratha', 'nihari', 'paya',
-      'biryani', 'karahi', 'tikka', 'seekh kabab', 'pakwan',
-      'chaat', 'samosa', 'gol gappa', 'shawarma', 'burger',
-      'pizza', 'chinese', 'seafood', 'bbq', 'lassi',
-    ];
+    // Targeted keywords for fast execution
+    const keywords = ['restaurant', 'cafe', 'fast food', 'hotel', 'biryani', 'bbq'];
 
     try {
-      for (const kw of keywords) {
-        if (results.length >= limit * 2) break;
-
-        // Use viewbox centred on user + nearby radius so local places rank higher
+      const fetchPromises = keywords.map(async (kw) => {
         const deg = 0.05; // ~5 km box
         const viewbox = `${longitude - deg},${latitude + deg},${longitude + deg},${latitude - deg}`;
-        const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(kw)}&viewbox=${viewbox}&bounded=0&limit=20&countrycodes=&accept-language=en`;
+        const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(kw)}&viewbox=${viewbox}&bounded=0&limit=15&accept-language=en`;
         const res = await axios.get(url, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           },
-          timeout: 6000,
+          timeout: 3000,
         });
+        return res.data || [];
+      });
 
-        const items = res.data || [];
-        items.forEach((item: any, idx: number) => {
-          const pLat = parseFloat(item.lat);
-          const pLng = parseFloat(item.lon);
-          const name = item.display_name?.split(',')[0] || item.name;
+      const responses = await Promise.allSettled(fetchPromises);
+      responses.forEach((r) => {
+        if (r.status === 'fulfilled' && Array.isArray(r.value)) {
+          r.value.forEach((item: any, idx: number) => {
+            const pLat = parseFloat(item.lat);
+            const pLng = parseFloat(item.lon);
+            const name = item.display_name?.split(',')[0] || item.name;
 
-          if (name && pLat && pLng && !results.some(r => r.name.toLowerCase() === name.toLowerCase())) {
-            const dist = this.calculateDistance(latitude, longitude, pLat, pLng);
+            if (name && pLat && pLng && !results.some(existing => existing.name.toLowerCase() === name.toLowerCase())) {
+              const dist = this.calculateDistance(latitude, longitude, pLat, pLng);
+              const parts = (item.display_name || '').split(',').map((p: string) => p.trim());
+              const city = parts[1] || parts[0] || '';
+              const country = parts[parts.length - 1] || '';
+              const rawType = item.type || 'restaurant';
+              const cuisineTypes = [rawType.replace(/_/g, ' ')];
 
-            // Extract city / country from Nominatim display_name parts
-            const parts = (item.display_name || '').split(',').map((p: string) => p.trim());
-            const city = parts[1] || parts[0] || '';
-            const country = parts[parts.length - 1] || '';
+              let placeType = 'Restaurant';
+              if (rawType === 'cafe') placeType = 'Cafe';
+              else if (rawType === 'fast_food') placeType = 'Fast Food';
+              else if (rawType === 'hotel') placeType = 'Hotel';
 
-            // Determine cuisine and place type from Nominatim type/class
-            const rawType = item.type || 'restaurant';
-            const cuisineTypes = [rawType.replace(/_/g, ' ')];
-
-            let placeType = 'Restaurant';
-            if (rawType === 'cafe' || kw === 'cafe') placeType = 'Cafe';
-            else if (rawType === 'fast_food' || kw === 'fast food') placeType = 'Fast Food';
-            else if (rawType === 'hotel' || kw === 'hotel') placeType = 'Hotel';
-
-            results.push({
-              id: `nom-${item.place_id || Math.random().toString(36).substr(2, 7)}`,
-              name,
-              address: parts.slice(0, 3).join(', ') || 'Local Area',
-              city,
-              country,
-              location: { latitude: pLat, longitude: pLng },
-              rating: Math.round((4.1 + (idx % 9) * 0.1) * 10) / 10,
-              userRatingCount: 40 + idx * 15,
-              googleMapsUri: `https://www.google.com/maps/search/?api=1&query=${pLat},${pLng}`,
-              priceLevel: '$$',
-              cuisine: cuisineTypes[0],
-              cuisineTypes,
-              placeType,
-              images: [this.getCuisineImage(name, placeType, cuisineTypes) as string],
-              isOpenNow: true,
-              distanceKm: dist,
-            });
-          }
-        });
-      }
+              results.push({
+                id: `nom-${item.place_id || Math.random().toString(36).substr(2, 7)}`,
+                name,
+                address: parts.slice(0, 3).join(', ') || 'Local Area',
+                city,
+                country,
+                location: { latitude: pLat, longitude: pLng },
+                rating: Math.round((4.1 + (idx % 9) * 0.1) * 10) / 10,
+                userRatingCount: 40 + idx * 15,
+                googleMapsUri: `https://www.google.com/maps/search/?api=1&query=${pLat},${pLng}`,
+                priceLevel: '$$',
+                cuisine: cuisineTypes[0],
+                cuisineTypes,
+                placeType,
+                images: [this.getCuisineImage(name, placeType, cuisineTypes) as string],
+                isOpenNow: true,
+                distanceKm: dist,
+              });
+            }
+          });
+        }
+      });
 
       results.sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
       return results.slice(0, limit);
