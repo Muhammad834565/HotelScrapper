@@ -1,0 +1,72 @@
+# ============================================
+# Hotel Scraper – NestJS + Next.js + Docker
+# ============================================
+
+# ── Node / npm ──────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+package-lock.json
+yarn.lock
+
+# ── Environment / Secrets ───────────────────
+.env
+.env.*
+!.env.example
+!.env.local.example
+*.env.local
+
+# ── NestJS Backend ──────────────────────────
+backend/dist/
+backend/build/
+backend/.cache/
+
+# ── Next.js Frontend ────────────────────────
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.turbo/
+frontend/.vercel/
+frontend/next-env.d.ts
+
+# ── TypeScript ──────────────────────────────
+*.tsbuildinfo
+
+# ── Docker ──────────────────────────────────
+.dockerignore
+
+# ── OS / Editor artifacts ───────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ── Logs ────────────────────────────────────
+logs/
+*.log
+*.log.*
+
+# ── Test / Coverage ─────────────────────────
+coverage/
+.nyc_output/
+*.lcov
+
+# ── Puppeteer / Chrome downloads ────────────
+.local-chromium/
+.cache/puppeteer/
+
+# ── Misc ────────────────────────────────────
+*.zip
+*.tar.gz
+tmp/
+temp/
