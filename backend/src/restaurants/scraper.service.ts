@@ -44,41 +44,91 @@ export class GoogleMapsScraperService {
     return Math.round(R * c * 100) / 100;
   }
 
-  // Engine 1: OpenStreetMap Overpass API (Lightweight spatial query)
+  /**
+   * Map cuisine keywords/place types to a relevant Unsplash food photo.
+   * Only used as fallback when no real image is scraped from the source.
+   */
+  private getCuisineImage(name: string, placeType: string, cuisines: string[]): string | undefined {
+    const n = name.toLowerCase();
+    const c = cuisines.join(' ').toLowerCase();
+
+    // Pakistani / South Asian street food
+    if (n.includes('chai') || n.includes('doodh patti') || n.includes('karak'))
+      return 'https://images.unsplash.com/photo-1556679343-c7306c1976bc?w=600&auto=format&fit=crop&q=80'; // chai cup
+    if (n.includes('roti') || n.includes('paratha') || n.includes('naan') || n.includes('halwa puri'))
+      return 'https://images.unsplash.com/photo-1601050690293-5c7f5e8b0b1e?w=600&auto=format&fit=crop&q=80'; // bread/roti
+    if (n.includes('nihari') || n.includes('paya') || c.includes('nihari'))
+      return 'https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=600&auto=format&fit=crop&q=80'; // curry stew
+    if (n.includes('biryani') || c.includes('biryani'))
+      return 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?w=600&auto=format&fit=crop&q=80'; // biryani
+    if (n.includes('karahi') || n.includes('tikka') || n.includes('seekh') || c.includes('karahi'))
+      return 'https://images.unsplash.com/photo-1565557623262-b51c2513a641?w=600&auto=format&fit=crop&q=80'; // Pakistani curry
+    if (n.includes('bbq') || n.includes('barbecue') || n.includes('grill') || c.includes('bbq'))
+      return 'https://images.unsplash.com/photo-1544025162-d76694265947?w=600&auto=format&fit=crop&q=80'; // BBQ grill
+    if (n.includes('burger') || c.includes('burger') || c.includes('american'))
+      return 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=600&auto=format&fit=crop&q=80'; // burger
+    if (n.includes('pizza') || n.includes('pasta') || n.includes('italia') || c.includes('italian'))
+      return 'https://images.unsplash.com/photo-1571091718767-18b5b1457add?w=600&auto=format&fit=crop&q=80'; // pizza
+    if (n.includes('sushi') || n.includes('ramen') || n.includes('japanese') || c.includes('japanese'))
+      return 'https://images.unsplash.com/photo-1579871494447-9811cf80d66c?w=600&auto=format&fit=crop&q=80'; // sushi
+    if (n.includes('chinese') || n.includes('noodle') || c.includes('chinese'))
+      return 'https://images.unsplash.com/photo-1552611052-33e04de081de?w=600&auto=format&fit=crop&q=80'; // noodles
+    if (n.includes('seafood') || n.includes('fish') || c.includes('seafood'))
+      return 'https://images.unsplash.com/photo-1534422298391-e4f8c172dddb?w=600&auto=format&fit=crop&q=80'; // seafood
+    if (placeType === 'Cafe' || n.includes('cafe') || n.includes('coffee'))
+      return 'https://images.unsplash.com/photo-1509042239860-f550ce710b93?w=600&auto=format&fit=crop&q=80'; // cafe/coffee
+    if (placeType === 'Bakery' || n.includes('bakery') || n.includes('bread'))
+      return 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=600&auto=format&fit=crop&q=80'; // bakery
+    if (placeType === 'Hotel')
+      return 'https://images.unsplash.com/photo-1566073771259-6a8506099945?w=600&auto=format&fit=crop&q=80'; // hotel
+    if (n.includes('ice cream') || n.includes('dessert') || n.includes('sweet'))
+      return 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=600&auto=format&fit=crop&q=80'; // dessert
+    if (n.includes('shawarma') || n.includes('wrap') || n.includes('arabic') || c.includes('arabic'))
+      return 'https://images.unsplash.com/photo-1561651823-34feb02250e4?w=600&auto=format&fit=crop&q=80'; // shawarma
+    if (n.includes('chaat') || n.includes('samosa') || n.includes('gol gappa'))
+      return 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=600&auto=format&fit=crop&q=80'; // street food chaat
+    // Generic food fallback — no restaurant interior
+    return 'https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=600&auto=format&fit=crop&q=80'; // food platter
+  }
+
+  // Engine 1: OpenStreetMap Overpass API — uses HTTP POST (more reliable than GET)
   async fetchOsmRestaurants(latitude: number, longitude: number, radiusMeters: number = 8000, limit: number = 50): Promise<ScrapedRestaurant[]> {
     this.logger.log(`🌐 Querying OpenStreetMap Overpass API for Lat: ${latitude}, Lng: ${longitude}`);
 
-    const query = `
-      [out:json][timeout:15];
-      (
-        node["amenity"="restaurant"](around:${radiusMeters}, ${latitude}, ${longitude});
-        way["amenity"="restaurant"](around:${radiusMeters}, ${latitude}, ${longitude});
-        node["amenity"="fast_food"](around:${radiusMeters}, ${latitude}, ${longitude});
-        way["amenity"="fast_food"](around:${radiusMeters}, ${latitude}, ${longitude});
-        node["amenity"="cafe"](around:${radiusMeters}, ${latitude}, ${longitude});
-        node["amenity"="food_court"](around:${radiusMeters}, ${latitude}, ${longitude});
-      );
-      out center ${Math.max(limit * 2, 40)};
-    `;
+    // Simplified query — node-only for speed, includes Pakistani-relevant amenity types
+    const query = `[out:json][timeout:20];(
+      node["amenity"="restaurant"](around:${radiusMeters},${latitude},${longitude});
+      node["amenity"="fast_food"](around:${radiusMeters},${latitude},${longitude});
+      node["amenity"="cafe"](around:${radiusMeters},${latitude},${longitude});
+      node["amenity"="food_court"](around:${radiusMeters},${latitude},${longitude});
+      node["amenity"="ice_cream"](around:${radiusMeters},${latitude},${longitude});
+      node["amenity"="bakery"](around:${radiusMeters},${latitude},${longitude});
+      node["shop"="bakery"](around:${radiusMeters},${latitude},${longitude});
+      node["cuisine"](around:${radiusMeters},${latitude},${longitude});
+      node["name"~"chai|dhaba|roti|nihari|biryani|karahi|pakwan|tikka",i](around:${radiusMeters},${latitude},${longitude});
+    );out ${Math.max(limit * 3, 60)};`;
 
+    // Use POST for all endpoints — much more reliable than GET with long query strings
     const overpassEndpoints = [
       'https://overpass-api.de/api/interpreter',
       'https://lz4.overpass-api.de/api/interpreter',
-      'https://z.overpass-api.de/api/interpreter',
       'https://overpass.private.coffee/api/interpreter',
       'https://overpass.kumi.systems/api/interpreter',
+      'https://z.overpass-api.de/api/interpreter',
     ];
 
     for (const endpoint of overpassEndpoints) {
       try {
-        const res = await axios.get(
-          `${endpoint}?data=${encodeURIComponent(query)}`,
+        const res = await axios.post(
+          endpoint,
+          `data=${encodeURIComponent(query)}`,
           {
             headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
               'Accept': 'application/json',
               'User-Agent': 'HotelRestaurantScraper/1.0',
             },
-            timeout: 8000,
+            timeout: 18000,
           }
         );
 
@@ -135,11 +185,12 @@ export class GoogleMapsScraperService {
               cuisine: cuisineTypes[0] || 'Dining',
               cuisineTypes,
               placeType,
-              phone,
-              email,
-              website,
+              phone: phone || undefined,
+              email: email || undefined,
+              website: website || undefined,
+              images: [this.getCuisineImage(name, placeType, cuisineTypes) as string],
               openingHours,
-              isOpenNow: true, // OSM does not have real-time data; default to open
+              isOpenNow: true,
               distanceKm: dist,
             });
           }
@@ -161,13 +212,23 @@ export class GoogleMapsScraperService {
   async fetchNominatimRestaurants(latitude: number, longitude: number, limit: number = 50): Promise<ScrapedRestaurant[]> {
     this.logger.log(`📍 Querying Nominatim REST API for Lat: ${latitude}, Lng: ${longitude}`);
     const results: ScrapedRestaurant[] = [];
-    const keywords = ['restaurant', 'pakwan', 'biryani', 'food court', 'fast food', 'cafe', 'karahi', 'hotel'];
+    // Expanded keyword list — includes Pakistani street food and South Asian local terms
+    const keywords = [
+      'restaurant', 'hotel', 'cafe', 'food court', 'fast food',
+      'chai', 'dhaba', 'roti', 'paratha', 'nihari', 'paya',
+      'biryani', 'karahi', 'tikka', 'seekh kabab', 'pakwan',
+      'chaat', 'samosa', 'gol gappa', 'shawarma', 'burger',
+      'pizza', 'chinese', 'seafood', 'bbq', 'lassi',
+    ];
 
     try {
       for (const kw of keywords) {
         if (results.length >= limit * 2) break;
 
-        const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(kw)}&lat=${latitude}&lon=${longitude}&bounded=0&limit=30`;
+        // Use viewbox centred on user + nearby radius so local places rank higher
+        const deg = 0.05; // ~5 km box
+        const viewbox = `${longitude - deg},${latitude + deg},${longitude + deg},${latitude - deg}`;
+        const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(kw)}&viewbox=${viewbox}&bounded=0&limit=20&countrycodes=&accept-language=en`;
         const res = await axios.get(url, {
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -213,6 +274,7 @@ export class GoogleMapsScraperService {
               cuisine: cuisineTypes[0],
               cuisineTypes,
               placeType,
+              images: [this.getCuisineImage(name, placeType, cuisineTypes) as string],
               isOpenNow: true,
               distanceKm: dist,
             });
@@ -327,19 +389,21 @@ export class GoogleMapsScraperService {
                 itemLng = userLng + (idx % 2 === 0 ? -0.0025 * idx : 0.0025 * idx);
               }
 
-              // Scrape main image / thumbnail
-              let imgUrl = 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=600&auto=format&fit=crop&q=80';
-              const imgEl = card.querySelector('img[src*="googleusercontent"], img[src*="lh3"], img[src*="unsplash"]') as HTMLImageElement | null;
-              if (imgEl && imgEl.src && !imgEl.src.includes('data:image')) {
+              // Scrape real Google image — only keep if it's actually from Google CDN
+              let imgUrl: string | undefined;
+              const imgEl = card.querySelector('img[src*="googleusercontent"], img[src*="lh3.google"], img[src*="maps.gstatic"]') as HTMLImageElement | null;
+              if (imgEl && imgEl.src && !imgEl.src.includes('data:image') && imgEl.naturalWidth > 10) {
                 imgUrl = imgEl.src;
               }
+              // imgUrl is intentionally left undefined if no real image found;
+              // the frontend helper getCuisineImage will fill in a relevant food photo.
 
-              // Extract phone number or contact info
-              let phone = '+1 (555) 234-5678';
-              const phoneEl = card.querySelector('[aria-label*="Phone"], [data-tooltip*="phone"], span[class*="phone"]');
+              // Extract phone number — only keep if it looks like a real phone number
+              let phone: string | undefined;
+              const phoneEl = card.querySelector('[aria-label*="Phone"], [data-tooltip*="phone"], span[class*="phone"], [data-item-id*="phone"]');
               if (phoneEl) {
                 const pText = phoneEl.textContent?.trim();
-                if (pText && pText.length > 5) phone = pText;
+                if (pText && /[0-9]{5,}/.test(pText)) phone = pText;
               }
 
               // Extract opening hours / open state
@@ -362,20 +426,34 @@ export class GoogleMapsScraperService {
 
               const cuisines: string[] = [];
               const lowerName = name.toLowerCase();
-              if (lowerName.includes('bbq') || lowerName.includes('barbecue')) cuisines.push('BBQ');
+              // Pakistani / South Asian
+              if (lowerName.includes('chai') || lowerName.includes('doodh')) cuisines.push('Chai / Tea');
+              if (lowerName.includes('roti') || lowerName.includes('paratha') || lowerName.includes('naan')) cuisines.push('Roti / Bread');
+              if (lowerName.includes('nihari') || lowerName.includes('paya')) cuisines.push('Nihari');
               if (lowerName.includes('biryani') || lowerName.includes('briyani')) cuisines.push('Biryani');
-              if (lowerName.includes('karahi') || lowerName.includes('tandoori')) cuisines.push('Pakistani/Indian');
+              if (lowerName.includes('karahi') || lowerName.includes('handi')) cuisines.push('Karahi');
+              if (lowerName.includes('tikka') || lowerName.includes('seekh') || lowerName.includes('tandoori')) cuisines.push('BBQ / Tikka');
+              if (lowerName.includes('pakwan') || lowerName.includes('halwa')) cuisines.push('Pakistani');
+              if (lowerName.includes('chaat') || lowerName.includes('samosa') || lowerName.includes('gol gappa')) cuisines.push('Street Food');
+              if (lowerName.includes('shawarma') || lowerName.includes('arabic')) cuisines.push('Shawarma / Arabic');
+              if (lowerName.includes('bbq') || lowerName.includes('barbecue') || lowerName.includes('grill')) cuisines.push('BBQ');
               if (lowerName.includes('pizza') || lowerName.includes('pasta') || lowerName.includes('italia')) cuisines.push('Italian');
-              if (lowerName.includes('burger') || lowerName.includes('grill')) cuisines.push('American');
-              if (lowerName.includes('sushi') || lowerName.includes('ramen')) cuisines.push('Japanese');
-              if (cuisines.length === 0) cuisines.push('International');
+              if (lowerName.includes('burger')) cuisines.push('Burgers');
+              if (lowerName.includes('sushi') || lowerName.includes('ramen') || lowerName.includes('japanese')) cuisines.push('Japanese');
+              if (lowerName.includes('chinese') || lowerName.includes('noodle')) cuisines.push('Chinese');
+              if (lowerName.includes('seafood') || lowerName.includes('fish')) cuisines.push('Seafood');
+              if (lowerName.includes('ice cream') || lowerName.includes('dessert') || lowerName.includes('sweet')) cuisines.push('Desserts');
+              // Category text from DOM
+              if (categoryText.toLowerCase().includes('pakistani')) cuisines.push('Pakistani');
+              if (categoryText.toLowerCase().includes('biryani') && !cuisines.includes('Biryani')) cuisines.push('Biryani');
+              if (cuisines.length === 0) cuisines.push('Local Dining');
 
               list.push({
                 id: `gmap-${Math.random().toString(36).substr(2, 9)}`,
                 name,
                 address,
-                city: 'Local District',
-                country: 'Local Country',
+                city: '',
+                country: '',
                 location: { latitude: itemLat, longitude: itemLng },
                 rating,
                 userRatingCount,
@@ -384,10 +462,10 @@ export class GoogleMapsScraperService {
                 cuisine: cuisines[0],
                 cuisineTypes: cuisines,
                 placeType,
-                phone,
-                email: `info@${name.toLowerCase().replace(/[^a-z0-9]/g, '') || 'restaurant'}.com`,
+                phone: phone || undefined,
                 website: href,
-                images: [imgUrl],
+                // Only include image if actually scraped from Google CDN
+                images: imgUrl ? [imgUrl] : undefined,
                 openingHours: [
                   `Monday: 11:00 AM – 11:00 PM`,
                   `Tuesday: 11:00 AM – 11:00 PM`,
@@ -408,6 +486,11 @@ export class GoogleMapsScraperService {
         items.forEach((item) => {
           if (!results.some(r => r.name.toLowerCase() === item.name.toLowerCase())) {
             item.distanceKm = this.calculateDistance(latitude, longitude, item.location.latitude, item.location.longitude);
+            // Fill in a cuisine-relevant image if none was scraped from Google
+            if (!item.images || item.images.length === 0) {
+              const fallbackImg = this.getCuisineImage(item.name, item.placeType || 'Restaurant', item.cuisineTypes || []);
+              if (fallbackImg) item.images = [fallbackImg];
+            }
             results.push(item);
           }
         });
