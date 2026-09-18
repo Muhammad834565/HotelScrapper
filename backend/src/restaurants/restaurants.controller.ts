@@ -12,11 +12,6 @@ export class RestaurantsController {
     return this.restaurantsService.findNearestRestaurants(dto);
   }
 
-  @Get('history')
-  async getHistory() {
-    return this.restaurantsService.getSearchHistory();
-  }
-
   @Get('geocode')
   async geocode(@Query('q') query: string) {
     return this.restaurantsService.geocodeLocation(query);

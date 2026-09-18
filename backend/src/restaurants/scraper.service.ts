@@ -109,13 +109,14 @@ export class GoogleMapsScraperService {
     );out ${Math.max(limit * 3, 60)};`;
 
     // Use POST for all endpoints — much more reliable than GET with long query strings
-    const overpassEndpoints = [
+    /*const overpassEndpoints = [
       'https://overpass-api.de/api/interpreter',
       'https://lz4.overpass-api.de/api/interpreter',
       'https://overpass.private.coffee/api/interpreter',
       'https://overpass.kumi.systems/api/interpreter',
       'https://z.overpass-api.de/api/interpreter',
-    ];
+    ];*/
+    const overpassEndpoints = []
 
     for (const endpoint of overpassEndpoints) {
       try {
@@ -524,7 +525,7 @@ export class GoogleMapsScraperService {
     finalResults.sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
 
     this.logger.log(`✅ Combined total ${finalResults.length} restaurants for location (${latitude}, ${longitude})`);
-    return finalResults.slice(0, limit);
+    return finalResults;
   }
 }
 

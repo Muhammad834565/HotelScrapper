@@ -27,15 +27,6 @@ export interface SearchNearbyResponse {
   source: string;
 }
 
-export interface SearchHistoryRecord {
-  id: string;
-  latitude: number;
-  longitude: number;
-  resultsCount: number;
-  createdAt: string;
-  results?: Restaurant[];
-}
-
 export interface GeocodeSuggestion {
   displayName: string;
   latitude: number;
@@ -62,17 +53,6 @@ export async function fetchNearestRestaurants(
   } catch (err: any) {
     console.error('Failed to fetch from backend:', err);
     throw err;
-  }
-}
-
-export async function fetchSearchHistory(): Promise<SearchHistoryRecord[]> {
-  try {
-    const res = await fetch(`${API_BASE_URL}/restaurants/history`);
-    if (!res.ok) return [];
-    return await res.json();
-  } catch (err) {
-    console.error('Failed to fetch search history:', err);
-    return [];
   }
 }
 

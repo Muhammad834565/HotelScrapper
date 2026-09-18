@@ -15,13 +15,10 @@ import {
 } from 'lucide-react';
 import InteractiveMap from '../components/InteractiveMap';
 import RestaurantCard from '../components/RestaurantCard';
-import SearchHistorySidebar from '../components/SearchHistorySidebar';
 import LocationSearchBar from '../components/LocationSearchBar';
 import {
   Restaurant,
-  SearchHistoryRecord,
   fetchNearestRestaurants,
-  fetchSearchHistory,
 } from '../lib/api';
 
 export default function Home() {
@@ -39,7 +36,6 @@ export default function Home() {
   const [limit, setLimit] = useState<number>(10);
 
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
-  const [history, setHistory] = useState<SearchHistoryRecord[]>([]);
   const [selectedRestaurantId, setSelectedRestaurantId] = useState<string | null>(null);
 
   const [loading, setLoading] = useState<boolean>(false);
@@ -53,8 +49,6 @@ export default function Home() {
     try {
       const data = await fetchNearestRestaurants(lat, lng, rad, limit);
       setRestaurants(data.restaurants || []);
-      const updatedHistory = await fetchSearchHistory();
-      setHistory(updatedHistory);
     } catch (err: any) {
       setError(
         'Failed to connect to NestJS backend. Please verify the backend is running on http://localhost:5000.'
@@ -280,72 +274,55 @@ export default function Home() {
         )}
       </section>
 
-      {/* ─── Content: Map + Cards + Sidebar ──────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Left: Map + Card Grid */}
-        <div className="lg:col-span-2 space-y-6">
-          <InteractiveMap
-            userLocation={location}
-            restaurants={restaurants}
-            selectedRestaurantId={selectedRestaurantId}
-            onSelectRestaurant={(res) => setSelectedRestaurantId(res.id)}
-          />
+      {/* ─── Content: Map + Cards ─────────────────────────────────────── */}
+      <div className="space-y-6">
+        <InteractiveMap
+          userLocation={location}
+          restaurants={restaurants}
+          selectedRestaurantId={selectedRestaurantId}
+          onSelectRestaurant={(res) => setSelectedRestaurantId(res.id)}
+        />
 
-          {/* Results header */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Utensils className="w-5 h-5 text-emerald-400" />
-              <h2 className="text-lg font-bold text-white">
-                {restaurants.length > 0
-                  ? `${restaurants.length} Restaurants near ${locationLabel}`
-                  : 'Restaurants'}
-              </h2>
-            </div>
-            <span className="text-xs text-gray-400 bg-gray-900 px-3 py-1 rounded-full border border-white/10">
-              Sorted by Proximity
-            </span>
+        {/* Results header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Utensils className="w-5 h-5 text-emerald-400" />
+            <h2 className="text-lg font-bold text-white">
+              {restaurants.length > 0
+                ? `${restaurants.length} Restaurants near ${locationLabel}`
+                : 'Restaurants'}
+            </h2>
           </div>
-
-          {/* Restaurant cards */}
-          {loading ? (
-            <div className="p-12 glass-panel rounded-2xl flex flex-col items-center justify-center text-center space-y-3">
-              <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
-              <p className="text-xs text-gray-400 font-medium">
-                Fetching restaurants near <span className="text-emerald-400">{locationLabel}</span>…
-              </p>
-            </div>
-          ) : restaurants.length === 0 ? (
-            <div className="p-12 glass-panel rounded-2xl text-center text-gray-400 text-xs">
-              No restaurants found. Try a different location or increase the search radius.
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {restaurants.map((item, idx) => (
-                <RestaurantCard
-                  key={item.id}
-                  restaurant={item}
-                  rank={idx + 1}
-                  isSelected={selectedRestaurantId === item.id}
-                  onSelect={() => setSelectedRestaurantId(item.id)}
-                />
-              ))}
-            </div>
-          )}
+          <span className="text-xs text-gray-400 bg-gray-900 px-3 py-1 rounded-full border border-white/10">
+            Sorted by Proximity
+          </span>
         </div>
 
-        {/* Right: History Sidebar */}
-        <div className="lg:col-span-1">
-          <SearchHistorySidebar
-            history={history}
-            onSelectHistory={(lat, lng) => {
-              setLocation({ latitude: lat, longitude: lng });
-              setLocationLabel(`${lat.toFixed(4)}, ${lng.toFixed(4)}`);
-              setCustomLat(lat.toFixed(6));
-              setCustomLng(lng.toFixed(6));
-              handleSearch(lat, lng);
-            }}
-          />
-        </div>
+        {/* Restaurant cards */}
+        {loading ? (
+          <div className="p-12 glass-panel rounded-2xl flex flex-col items-center justify-center text-center space-y-3">
+            <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
+            <p className="text-xs text-gray-400 font-medium">
+              Fetching restaurants near <span className="text-emerald-400">{locationLabel}</span>…
+            </p>
+          </div>
+        ) : restaurants.length === 0 ? (
+          <div className="p-12 glass-panel rounded-2xl text-center text-gray-400 text-xs">
+            No restaurants found. Try a different location or increase the search radius.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {restaurants.map((item, idx) => (
+              <RestaurantCard
+                key={item.id}
+                restaurant={item}
+                rank={idx + 1}
+                isSelected={selectedRestaurantId === item.id}
+                onSelect={() => setSelectedRestaurantId(item.id)}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </main>
   );

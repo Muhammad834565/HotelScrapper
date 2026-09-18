@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { RestaurantsModule } from './restaurants/restaurants.module';
-import { SearchHistory } from './restaurants/entities/search-history.entity';
+import { RestaurantEntity } from './restaurants/entities/restaurant.entity';
 
 @Module({
   imports: [
@@ -19,7 +19,7 @@ import { SearchHistory } from './restaurants/entities/search-history.entity';
         username: configService.get<string>('DB_USERNAME', 'postgres'),
         password: configService.get<string>('DB_PASSWORD', 'postgres'),
         database: configService.get<string>('DB_NAME', 'restaurant_db'),
-        entities: [SearchHistory],
+        entities: [RestaurantEntity],
         synchronize: true, // Auto-create tables in dev environment
         autoLoadEntities: true,
         retryAttempts: 2,

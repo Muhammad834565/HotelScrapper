@@ -3,10 +3,10 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { RestaurantsController } from './restaurants.controller';
 import { RestaurantsService } from './restaurants.service';
 import { GoogleMapsScraperService } from './scraper.service';
-import { SearchHistory } from './entities/search-history.entity';
+import { RestaurantEntity } from './entities/restaurant.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([SearchHistory])],
+  imports: [TypeOrmModule.forFeature([RestaurantEntity])],
   controllers: [RestaurantsController],
   providers: [RestaurantsService, GoogleMapsScraperService],
   exports: [RestaurantsService, GoogleMapsScraperService],
