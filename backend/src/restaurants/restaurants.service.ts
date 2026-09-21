@@ -143,9 +143,10 @@ export class RestaurantsService {
   }
 
   /**
-   * Fast DB lookup first.
-   * If cached DB results count >= requested limit, return DB results.
-   * Otherwise execute live scraping to fetch requested limit.
+   * DB lookup first — always instant.
+   * - If DB has >= limit: return immediately.
+   * - If DB has some (but < limit): return what we have + kick off background scraping to collect more.
+   * - If DB has nothing: live-scrape synchronously with auto-radius expansion, then return results.
    */
   async findNearestRestaurants(dto: SearchLocationDto): Promise<{ restaurants: RestaurantItem[]; source: string }> {
     const limit = Math.min(dto.limit || 10, 1000);
@@ -177,71 +178,129 @@ export class RestaurantsService {
       return dist <= radiusKm;
     });
 
+    // ── CASE 1: DB has enough — return instantly ─────────────────────────
     if (validDbRestaurants.length >= limit) {
-      this.logger.log(`⚡ Instant response: Found ${validDbRestaurants.length} cached restaurants within ${radiusKm}km in PostgreSQL (>= requested ${limit}).`);
-      const mapped = validDbRestaurants.map((res) => this.entityToItem(res, dto.latitude, dto.longitude));
-
-      const uniqueMapped: RestaurantItem[] = [];
-      const seen = new Set<string>();
-      for (const item of mapped) {
-        const key = item.googleMapsUri || (item.name.toLowerCase().replace(/[^a-z0-9]/g, '') + '_' + (item.phone || ''));
-        if (!seen.has(key)) {
-          seen.add(key);
-          uniqueMapped.push(item);
-        }
-      }
-
-      uniqueMapped.sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
-      const topResults = uniqueMapped.slice(0, limit);
-
-      // Only run background scrape if requested mode is higher quality than cached records
-      const hasLowerLevel = validDbRestaurants.some(r => (r.scrapingLevel || 'basic') === 'basic' && mode !== 'basic');
-      if (hasLowerLevel) {
-        this.saveAndScrapeInBackground(dto.latitude, dto.longitude, limit, mode);
-      }
-      return { restaurants: topResults, source: 'postgresql_database' };
+      this.logger.log(`⚡ Instant response: Found ${validDbRestaurants.length} cached restaurants within ${radiusKm}km (>= requested ${limit}).`);
+      return this.buildDbResponse(validDbRestaurants, dto, limit, mode, radiusKm);
     }
 
-    // 2. Execute live scraping for requested limit
-    this.logger.log(`🔍 Live scraping for location (${dto.latitude}, ${dto.longitude}) [limit=${limit}, radius=${radiusKm}km, mode=${mode}]...`);
-    let restaurants: RestaurantItem[] = [];
-    let source = `google_maps_puppeteer_scraper_${mode}`;
-
-    try {
-      const skipKeys = await this.getAdvancedKeys();
-      const scraped = await this.scraperService.scrapeNearestRestaurants(dto.latitude, dto.longitude, limit, mode, skipKeys);
-      if (scraped && scraped.length > 0) {
-        restaurants = scraped.map((s) => ({
-          ...s,
-          distanceKm: this.calculateDistance(dto.latitude, dto.longitude, s.location.latitude, s.location.longitude),
-          scrapingLevel: mode,
-        }));
-      }
-    } catch (err: any) {
-      this.logger.warn(`Live scraper error: ${err.message}`);
-      source = 'fallback_demo_data';
+    // ── CASE 2: DB has some but fewer than limit — return what we have,
+    //            kick off background scraping to discover more next time ──
+    if (validDbRestaurants.length > 0) {
+      this.logger.log(`⚡ Partial cache: Found ${validDbRestaurants.length}/${limit} restaurants in DB — returning now, scraping more in background...`);
+      this.scrapeAndSaveInBackground(dto.latitude, dto.longitude, limit, mode, radiusKm);
+      return this.buildDbResponse(validDbRestaurants, dto, limit, mode, radiusKm);
     }
 
-    // Save/upsert new scraped restaurants into PostgreSQL database without duplicates
-    await this.upsertRestaurantsToDatabase(restaurants, mode);
+    // ── CASE 3: DB is empty for this area — live-scrape synchronously ───
+    return this.liveScrapeWithRadiusExpansion(dto, limit, radiusKm, mode);
+  }
 
-    // Deduplicate in memory and enforce radius constraint
-    const uniqueResults: RestaurantItem[] = [];
+  /** Build deduplicated, sorted response from DB rows */
+  private buildDbResponse(
+    rows: RestaurantEntity[],
+    dto: SearchLocationDto,
+    limit: number,
+    mode: ScrapingMode,
+    radiusKm: number,
+  ): { restaurants: RestaurantItem[]; source: string } {
+    const mapped = rows.map((res) => this.entityToItem(res, dto.latitude, dto.longitude));
+    const uniqueMapped: RestaurantItem[] = [];
     const seen = new Set<string>();
-    for (const item of restaurants) {
+    for (const item of mapped) {
       const key = item.googleMapsUri || (item.name.toLowerCase().replace(/[^a-z0-9]/g, '') + '_' + (item.phone || ''));
-      const dist = item.distanceKm ?? this.calculateDistance(dto.latitude, dto.longitude, item.location.latitude, item.location.longitude);
-      if (!seen.has(key) && dist <= radiusKm) {
-        seen.add(key);
-        uniqueResults.push({ ...item, distanceKm: dist });
+      if (!seen.has(key)) { seen.add(key); uniqueMapped.push(item); }
+    }
+    uniqueMapped.sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
+    return { restaurants: uniqueMapped.slice(0, limit), source: 'postgresql_database' };
+  }
+
+  /** Fire-and-forget: scrape more restaurants and save to DB so next request is faster */
+  private scrapeAndSaveInBackground(lat: number, lng: number, limit: number, mode: ScrapingMode, radiusKm: number): void {
+    setImmediate(async () => {
+      try {
+        this.logger.log(`🔄 Background expansion scrape [mode=${mode}, radius=${radiusKm}km, limit=${limit}] near (${lat}, ${lng})...`);
+        const skipKeys = await this.getAdvancedKeys();
+        const scraped = await this.scraperService.scrapeNearestRestaurants(lat, lng, limit, mode, skipKeys);
+        if (scraped && scraped.length > 0) {
+          const items = scraped.map(s => ({
+            ...s,
+            distanceKm: this.calculateDistance(lat, lng, s.location.latitude, s.location.longitude),
+            scrapingLevel: mode,
+          }));
+          await this.upsertRestaurantsToDatabase(items, mode);
+          this.logger.log(`🔄 Background scrape complete: saved ${items.length} restaurants.`);
+        }
+      } catch (err: any) {
+        this.logger.warn(`Background expansion scrape error: ${err.message}`);
+      }
+    });
+  }
+
+  /** Synchronous live-scrape with auto-radius expansion (only used when DB is empty for area) */
+  private async liveScrapeWithRadiusExpansion(
+    dto: SearchLocationDto,
+    limit: number,
+    radiusKm: number,
+    mode: ScrapingMode,
+  ): Promise<{ restaurants: RestaurantItem[]; source: string }> {
+    // Build radius steps: user-selected → 2x → 4x → ... up to 80km max
+    const MAX_RADIUS_KM = 80;
+    const radiusSteps: number[] = [radiusKm];
+    let nextR = radiusKm * 2;
+    while (nextR <= MAX_RADIUS_KM) {
+      radiusSteps.push(Math.round(nextR * 10) / 10);
+      nextR *= 2;
+    }
+    if (radiusSteps[radiusSteps.length - 1] < MAX_RADIUS_KM) {
+      radiusSteps.push(MAX_RADIUS_KM);
+    }
+
+    const collectedItems: RestaurantItem[] = [];
+    const seenKeys = new Set<string>();
+    let source = `google_maps_puppeteer_scraper_${mode}`;
+    const skipKeys = await this.getAdvancedKeys();
+
+    for (let si = 0; si < radiusSteps.length; si++) {
+      const tryRadius = radiusSteps[si];
+      this.logger.log(`🔍 Live scraping [limit=${limit}, radius=${tryRadius}km, mode=${mode}] for (${dto.latitude}, ${dto.longitude})...`);
+
+      try {
+        const scraped = await this.scraperService.scrapeNearestRestaurants(
+          dto.latitude, dto.longitude, limit, mode, skipKeys,
+        );
+        if (scraped && scraped.length > 0) {
+          for (const s of scraped) {
+            const dist = this.calculateDistance(dto.latitude, dto.longitude, s.location.latitude, s.location.longitude);
+            if (dist > tryRadius) continue;
+            const key = s.googleMapsUri || (s.name.toLowerCase().replace(/[^a-z0-9]/g, '') + '_' + (s.phone || ''));
+            if (!seenKeys.has(key)) {
+              seenKeys.add(key);
+              collectedItems.push({ ...s, distanceKm: dist, scrapingLevel: mode });
+            }
+          }
+        }
+      } catch (err: any) {
+        this.logger.warn(`Live scraper error (radius=${tryRadius}km): ${err.message}`);
+        source = 'fallback_demo_data';
+      }
+
+      if (collectedItems.length >= limit) {
+        this.logger.log(`✅ Got ${collectedItems.length}/${limit} restaurants within ${tryRadius}km — done.`);
+        break;
+      }
+
+      const nextRadius = radiusSteps[si + 1];
+      if (nextRadius) {
+        this.logger.log(`⚠️ Only ${collectedItems.length}/${limit} found within ${tryRadius}km — expanding to ${nextRadius}km...`);
+      } else {
+        this.logger.log(`⚠️ Max radius ${MAX_RADIUS_KM}km reached — found ${collectedItems.length} restaurants total.`);
       }
     }
 
-    uniqueResults.sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
-    const topResults = uniqueResults.slice(0, limit);
-
-    return { restaurants: topResults, source };
-
+    await this.upsertRestaurantsToDatabase(collectedItems, mode);
+    collectedItems.sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
+    return { restaurants: collectedItems.slice(0, limit), source };
   }
 
   /**

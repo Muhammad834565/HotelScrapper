@@ -283,13 +283,12 @@ export default function Home() {
                 className="bg-gray-900/90 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
               >
                 <option value={1}>1</option>
+                <option value={3}>3</option>
+                <option value={5}>5</option>
                 <option value={10}>10</option>
                 <option value={20}>20</option>
                 <option value={30}>30</option>
                 <option value={50}>50</option>
-                <option value={100}>100</option>
-                <option value={500}>500</option>
-                <option value={1000}>1000</option>
               </select>
             </div>
           </div>
