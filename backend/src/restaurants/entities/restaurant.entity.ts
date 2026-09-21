@@ -80,6 +80,9 @@ export class RestaurantEntity {
   @Column('simple-json', { nullable: true })
   menuData: any[];
 
+  @Column({ type: 'varchar', default: 'basic' })
+  scrapingLevel: 'basic' | 'intermediate' | 'advanced';
+
   @CreateDateColumn()
   createdAt: Date;
 

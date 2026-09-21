@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional, Max, Min } from 'class-validator';
+import { IsNumber, IsOptional, IsIn, Max, Min } from 'class-validator';
 
 export class SearchLocationDto {
   @IsNumber()
@@ -20,4 +20,8 @@ export class SearchLocationDto {
   @Min(1)
   @Max(50)
   limit?: number; // Number of results to return, default 10
+
+  @IsOptional()
+  @IsIn(['basic', 'intermediate', 'advanced'])
+  scrapingMode?: 'basic' | 'intermediate' | 'advanced'; // Scraping depth, default 'basic'
 }

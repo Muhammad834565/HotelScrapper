@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import * as puppeteer from 'puppeteer';
+import * as fs from 'fs';
+import * as path from 'path';
+
+export type ScrapingMode = 'basic' | 'intermediate' | 'advanced';
 
 export interface ScrapedRestaurant {
   id: string;
@@ -106,7 +110,7 @@ export class GoogleMapsScraperService {
   }> {
     try {
       await page.goto(detailUrl, { waitUntil: 'domcontentloaded', timeout: 18000 });
-      await page.waitForSelector('[data-item-id], .rogA2c, .DUwDvf', { timeout: 8000 }).catch(() => {});
+      await page.waitForSelector('[data-item-id], .rogA2c, .DUwDvf', { timeout: 8000 }).catch(() => { });
       await new Promise((r) => setTimeout(r, 1500));
 
       const data = await page.evaluate(() => {
@@ -218,89 +222,89 @@ export class GoogleMapsScraperService {
       });
       // Wait for tab transition and about section content to render
       await new Promise(r => setTimeout(r, 2500));
-      
+
       // Scroll the main panel to load lazy items
       await page.evaluate(() => {
         const panels = Array.from(document.querySelectorAll('div[role="main"], .m6QErb'));
         for (const panel of panels) {
-           panel.scrollTop = panel.scrollHeight;
+          panel.scrollTop = panel.scrollHeight;
         }
       });
       await new Promise(r => setTimeout(r, 1500));
-      
+
       const aboutExtracted = await page.evaluate(() => {
         const aboutSection: Record<string, string[]> = {};
-        
+
         const knownCategories = [
-          'Accessibility', 'Service options', 'Highlights', 'Popular for', 
-          'Offerings', 'Dining options', 'Amenities', 'Atmosphere', 
+          'Accessibility', 'Service options', 'Highlights', 'Popular for',
+          'Offerings', 'Dining options', 'Amenities', 'Atmosphere',
           'Crowd', 'Planning', 'Payments', 'Children', 'Parking'
         ];
-        
+
         // 1. Try finding all category titles by standard classes
         const titleEls = Array.from(document.querySelectorAll('.fontTitleSmall, h2, h3, .fontTitleMedium'));
-        
+
         // 2. Also try finding elements that exactly match our known categories text (as a fallback for class name changes)
         const allSpansAndDivs = Array.from(document.querySelectorAll('span, div'));
         allSpansAndDivs.forEach(el => {
-            const text = el.textContent?.trim();
-            if (text && knownCategories.includes(text) && el.childElementCount === 0) {
-                if (!titleEls.includes(el as Element)) titleEls.push(el as Element);
-            }
+          const text = el.textContent?.trim();
+          if (text && knownCategories.includes(text) && el.childElementCount === 0) {
+            if (!titleEls.includes(el as Element)) titleEls.push(el as Element);
+          }
         });
 
         for (const titleEl of titleEls) {
-            const catName = titleEl.textContent?.trim();
-            if (!catName || catName.length < 3 || catName.length > 40) continue;
-            
-            // CRITICAL: Strictly require the category to be known to prevent scraping 
-            // Overview tab headers if the About tab click fails or is missing.
-            if (!knownCategories.includes(catName)) continue;
-            
-            const tags: string[] = [];
-            // Google Maps usually places items inside a parent or grandparent container
-            let container = titleEl.parentElement;
-            for (let i = 0; i < 5; i++) { // Walk up to 5 levels
-                if (!container) break;
-                
-                // Find all items inside this container
-                const itemEls = Array.from(container.querySelectorAll('li, .fontBodyMedium'));
-                
-                itemEls.forEach(el => {
-                    // Make sure the item is not the header itself or a parent of it
-                    if (el === titleEl || el.contains(titleEl)) return;
-                    
-                    let text = el.textContent?.trim() || '';
-                    
-                    // Try to extract text from the deepest/last span to avoid icon texts
-                    const spans = Array.from(el.querySelectorAll('span:not(:empty)'));
-                    if (spans.length > 0) {
-                        const lastSpan = spans[spans.length - 1];
-                        if (lastSpan.textContent) {
-                            text = lastSpan.textContent.trim();
-                        }
-                    }
-                    
-                    // Strip private use unicode characters (Material Icons)
-                    text = text.replace(/[\uE000-\uF8FF]/g, '').trim();
-                    
-                    if (text && text.length > 1 && text !== catName && !knownCategories.includes(text)) {
-                        // Filter out generic map tools text
-                        if (!['Travel time', 'Measure', 'Default', 'Satellite'].includes(text)) {
-                            if (!tags.includes(text)) tags.push(text);
-                        }
-                    }
-                });
-                
-                if (tags.length > 0) {
-                    break;
+          const catName = titleEl.textContent?.trim();
+          if (!catName || catName.length < 3 || catName.length > 40) continue;
+
+          // CRITICAL: Strictly require the category to be known to prevent scraping 
+          // Overview tab headers if the About tab click fails or is missing.
+          if (!knownCategories.includes(catName)) continue;
+
+          const tags: string[] = [];
+          // Google Maps usually places items inside a parent or grandparent container
+          let container = titleEl.parentElement;
+          for (let i = 0; i < 5; i++) { // Walk up to 5 levels
+            if (!container) break;
+
+            // Find all items inside this container
+            const itemEls = Array.from(container.querySelectorAll('li, .fontBodyMedium'));
+
+            itemEls.forEach(el => {
+              // Make sure the item is not the header itself or a parent of it
+              if (el === titleEl || el.contains(titleEl)) return;
+
+              let text = el.textContent?.trim() || '';
+
+              // Try to extract text from the deepest/last span to avoid icon texts
+              const spans = Array.from(el.querySelectorAll('span:not(:empty)'));
+              if (spans.length > 0) {
+                const lastSpan = spans[spans.length - 1];
+                if (lastSpan.textContent) {
+                  text = lastSpan.textContent.trim();
                 }
-                container = container.parentElement;
-            }
+              }
+
+              // Strip private use unicode characters (Material Icons)
+              text = text.replace(/[\uE000-\uF8FF]/g, '').trim();
+
+              if (text && text.length > 1 && text !== catName && !knownCategories.includes(text)) {
+                // Filter out generic map tools text
+                if (!['Travel time', 'Measure', 'Default', 'Satellite'].includes(text)) {
+                  if (!tags.includes(text)) tags.push(text);
+                }
+              }
+            });
 
             if (tags.length > 0) {
-                aboutSection[catName] = tags;
+              break;
             }
+            container = container.parentElement;
+          }
+
+          if (tags.length > 0) {
+            aboutSection[catName] = tags;
+          }
         }
 
         // 3. Fallback to aria-label parsing
@@ -311,10 +315,10 @@ export class GoogleMapsScraperService {
             const colonMatch = label.match(/^([A-Z][A-Za-z\s]{2,30}):\s*(.+)$/);
             if (colonMatch) {
               const cat = colonMatch[1].trim();
-              
+
               // CRITICAL: Only accept strictly known categories to prevent Map UI pollution
               if (!knownCategories.includes(cat)) continue;
-              
+
               const tagsRaw = colonMatch[2].split(/[,;]+/).map(t => t.trim()).filter(t => t.length > 1);
               if (tagsRaw.length > 0) {
                 if (!aboutSection[cat]) aboutSection[cat] = [];
@@ -344,47 +348,47 @@ export class GoogleMapsScraperService {
         if (menuTab) (menuTab as HTMLElement).click();
       });
       await new Promise(r => setTimeout(r, 2000));
-      
+
       const menuExtracted = await page.evaluate(() => {
         const items: any[] = [];
         const tryExtract = (container: Element) => {
-            const nameEl = container.querySelector('.fontHeadlineSmall, [class*="title"], h3');
-            const descEl = container.querySelector('.fontBodyMedium, [class*="desc"]');
-            const priceEl = container.querySelector('.fontBodyMedium, [class*="price"]');
-            const imgEl = container.querySelector('img');
-            
-            const name = nameEl?.textContent?.trim() || container.textContent?.split('\n')[0]?.trim();
-            if (!name || name.length < 2 || name.length > 50) return null;
-            
-            const fullText = container.textContent || '';
-            const priceMatch = fullText.match(/(\$|Rs|PKR|£|€)?\s*\d+(\.\d{2})?/i);
-            const price = priceMatch ? priceMatch[0] : undefined;
-            
-            return {
-                name,
-                description: descEl?.textContent?.trim() || undefined,
-                price,
-                photoUrl: imgEl?.src || undefined
-            };
+          const nameEl = container.querySelector('.fontHeadlineSmall, [class*="title"], h3');
+          const descEl = container.querySelector('.fontBodyMedium, [class*="desc"]');
+          const priceEl = container.querySelector('.fontBodyMedium, [class*="price"]');
+          const imgEl = container.querySelector('img');
+
+          const name = nameEl?.textContent?.trim() || container.textContent?.split('\n')[0]?.trim();
+          if (!name || name.length < 2 || name.length > 50) return null;
+
+          const fullText = container.textContent || '';
+          const priceMatch = fullText.match(/(\$|Rs|PKR|£|€)?\s*\d+(\.\d{2})?/i);
+          const price = priceMatch ? priceMatch[0] : undefined;
+
+          return {
+            name,
+            description: descEl?.textContent?.trim() || undefined,
+            price,
+            photoUrl: imgEl?.src || undefined
+          };
         };
 
         const seenNames = new Set();
         document.querySelectorAll('.fontHeadlineSmall').forEach(el => {
-             const parent = el.closest('div[role="button"]') || el.parentElement?.parentElement;
-             if(parent) {
-                 const item = tryExtract(parent);
-                 if(item && item.name && !seenNames.has(item.name)) {
-                     seenNames.add(item.name);
-                     items.push(item);
-                 }
-             }
+          const parent = el.closest('div[role="button"]') || el.parentElement?.parentElement;
+          if (parent) {
+            const item = tryExtract(parent);
+            if (item && item.name && !seenNames.has(item.name)) {
+              seenNames.add(item.name);
+              items.push(item);
+            }
+          }
         });
-        
+
         return items;
       });
-      
+
       if (menuExtracted && menuExtracted.length > 0) {
-          data.menuData = menuExtracted;
+        data.menuData = menuExtracted;
       }
 
       return data;
@@ -397,11 +401,13 @@ export class GoogleMapsScraperService {
   async fetchOsmRestaurants(latitude: number, longitude: number, radiusMeters: number = 8000, limit: number = 50): Promise<ScrapedRestaurant[]> {
     this.logger.log('Querying OSM Overpass API for Lat: ' + latitude + ', Lng: ' + longitude);
     const query = '[out:json][timeout:20];(node["amenity"="restaurant"](around:' + radiusMeters + ',' + latitude + ',' + longitude + ');node["amenity"="fast_food"](around:' + radiusMeters + ',' + latitude + ',' + longitude + ');node["amenity"="cafe"](around:' + radiusMeters + ',' + latitude + ',' + longitude + '););out ' + Math.max(limit * 3, 60) + ';';
-    const overpassEndpoints: string[] = [
+    /*const overpassEndpoints: string[] = [
       'https://overpass-api.de/api/interpreter',
       'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
       'https://overpass.kumi.systems/api/interpreter',
-    ];
+    ];*/
+    const overpassEndpoints: string[] = [];
+
     for (const endpoint of overpassEndpoints) {
       try {
         const res = await axios.post(endpoint, 'data=' + encodeURIComponent(query), {
@@ -484,8 +490,31 @@ export class GoogleMapsScraperService {
     }
   }
 
-  async scrapeGoogleMaps(latitude: number, longitude: number, limit: number = 50): Promise<ScrapedRestaurant[]> {
-    this.logger.log('Launching Puppeteer for Google Maps near Lat: ' + latitude + ', Lng: ' + longitude);
+  /**
+   * Load Google session cookies from cookies.json (for advanced mode).
+   * Export from Chrome: DevTools → Application → Cookies → right-click → Copy all as JSON.
+   */
+  private loadGoogleCookies(): puppeteer.CookieParam[] {
+    try {
+      const cookiePath = path.join(process.cwd(), 'cookies.json');
+      if (!fs.existsSync(cookiePath)) return [];
+      const raw = JSON.parse(fs.readFileSync(cookiePath, 'utf-8'));
+      return (Array.isArray(raw) ? raw : []).map((c: any) => ({
+        name: c.name,
+        value: c.value,
+        domain: c.domain || '.google.com',
+        path: c.path || '/',
+        secure: c.secure ?? true,
+        httpOnly: c.httpOnly ?? false,
+        sameSite: c.sameSite ?? 'None',
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  async scrapeGoogleMaps(latitude: number, longitude: number, limit: number = 50, mode: ScrapingMode = 'intermediate'): Promise<ScrapedRestaurant[]> {
+    this.logger.log(`Launching Puppeteer [mode=${mode}] for Google Maps near Lat: ${latitude}, Lng: ${longitude}`);
     let browser: puppeteer.Browser | null = null;
     const results: ScrapedRestaurant[] = [];
 
@@ -528,6 +557,20 @@ export class GoogleMapsScraperService {
       try {
         await listPage.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
         await new Promise((r) => setTimeout(r, 2500));
+
+        // ---- Advanced mode: inject stored Google session cookies ----
+        if (mode === 'advanced') {
+          const cookies = this.loadGoogleCookies();
+          if (cookies.length > 0) {
+            await listPage.setCookie(...cookies);
+            this.logger.log(`Advanced mode: injected ${cookies.length} Google session cookies.`);
+            // Reload with cookies active so Google recognises the session
+            await listPage.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+            await new Promise((r) => setTimeout(r, 2000));
+          } else {
+            this.logger.warn('Advanced mode: cookies.json not found or empty — falling back to guest scraping. Export your Google cookies to backend/cookies.json.');
+          }
+        }
 
         // ---- Dismiss ALL blocking overlays: consent banner, cookie notice, sign-in prompt ----
         try {
@@ -579,14 +622,15 @@ export class GoogleMapsScraperService {
           if (!feed) return;
           let lastCount = 0;
           let noChangeRounds = 0;
-          for (let round = 0; round < 30; round++) {
+          const maxRounds = Math.max(Math.ceil(targetCount / 2), 60);
+          for (let round = 0; round < maxRounds; round++) {
             feed.scrollBy(0, 1500);
-            await new Promise((r) => setTimeout(r, 800));
+            await new Promise((r) => setTimeout(r, 600));
             const endEl = document.querySelector('.HlvSq, [jsaction*="pane.resultend"]');
             if (endEl) break;
             const currentCount = document.querySelectorAll('div.Nv2PK, div[role="article"]').length;
             if (currentCount >= targetCount) break;
-            if (currentCount === lastCount) { noChangeRounds++; if (noChangeRounds >= 4) break; } else { noChangeRounds = 0; }
+            if (currentCount === lastCount) { noChangeRounds++; if (noChangeRounds >= 5) break; } else { noChangeRounds = 0; }
             lastCount = currentCount;
           }
         }, limit);
@@ -674,49 +718,74 @@ export class GoogleMapsScraperService {
         });
 
         const toProcess = cardData.slice(0, limit);
-        for (const item of toProcess) {
-          if (results.some((r) => r.name.toLowerCase() === item.name.toLowerCase())) continue;
-          this.logger.log('Scraping detail page for: ' + item.name);
-          const detail = await this.scrapeDetailPage(detailPage, item.detailUrl);
 
-          const restaurant: ScrapedRestaurant = {
-            id: item.id,
-            name: item.name,
-            address: detail.address || '',
-            city: (detail as any).city || '',
-            country: (detail as any).country || '',
-            location: {
-              latitude: detail.coordLat || item.location.latitude,
-              longitude: detail.coordLng || item.location.longitude,
-            },
-            rating: item.rating,
-            userRatingCount: item.userRatingCount,
-            googleMapsUri: item.googleMapsUri,
-            priceLevel: item.priceLevel,
-            cuisine: item.cuisine,
-            cuisineTypes: item.cuisineTypes,
-            placeType: item.placeType,
-            phone: detail.phone,
-            website: detail.website,
-            openingHours: detail.openingHours,
-            isOpenNow: detail.isOpenNow,
-            aboutSection: detail.aboutSection,
-            aboutKeywords: detail.aboutKeywords,
-          };
-
-          const detailImages = detail.images || [];
-          const cardImages = item.images || [];
-          const allImages = [...new Set([...detailImages, ...cardImages])].filter(Boolean);
-          if (allImages.length > 0) {
-            restaurant.images = allImages;
-          } else {
-            const fallbackImg = this.getCuisineImage(item.name, item.placeType, item.cuisineTypes);
-            if (fallbackImg) restaurant.images = [fallbackImg];
+        // ---- Basic mode: skip detail-page visits, return list-card data only ----
+        if (mode === 'basic') {
+          this.logger.log('Basic mode: skipping detail pages, returning list-card data only.');
+          for (const item of toProcess) {
+            if (results.some((r) => r.name.toLowerCase() === item.name.toLowerCase())) continue;
+            results.push({
+              id: item.id,
+              name: item.name,
+              address: '',
+              location: item.location,
+              rating: item.rating,
+              userRatingCount: item.userRatingCount,
+              googleMapsUri: item.googleMapsUri,
+              priceLevel: item.priceLevel,
+              cuisine: item.cuisine,
+              cuisineTypes: item.cuisineTypes,
+              placeType: item.placeType,
+              images: item.images?.length ? item.images : [this.getCuisineImage(item.name, item.placeType, item.cuisineTypes) || ''].filter(Boolean),
+              distanceKm: this.calculateDistance(latitude, longitude, item.location.latitude, item.location.longitude),
+            });
           }
+        } else {
+          // ---- Intermediate / Advanced: visit each detail page ----
+          for (const item of toProcess) {
+            if (results.some((r) => r.name.toLowerCase() === item.name.toLowerCase())) continue;
+            this.logger.log('Scraping detail page for: ' + item.name);
+            const detail = await this.scrapeDetailPage(detailPage, item.detailUrl);
 
-          restaurant.distanceKm = this.calculateDistance(latitude, longitude, restaurant.location.latitude, restaurant.location.longitude);
-          results.push(restaurant);
-        }
+            const restaurant: ScrapedRestaurant = {
+              id: item.id,
+              name: item.name,
+              address: detail.address || '',
+              city: (detail as any).city || '',
+              country: (detail as any).country || '',
+              location: {
+                latitude: detail.coordLat || item.location.latitude,
+                longitude: detail.coordLng || item.location.longitude,
+              },
+              rating: item.rating,
+              userRatingCount: item.userRatingCount,
+              googleMapsUri: item.googleMapsUri,
+              priceLevel: item.priceLevel,
+              cuisine: item.cuisine,
+              cuisineTypes: item.cuisineTypes,
+              placeType: item.placeType,
+              phone: detail.phone,
+              website: detail.website,
+              openingHours: detail.openingHours,
+              isOpenNow: detail.isOpenNow,
+              aboutSection: detail.aboutSection,
+              aboutKeywords: detail.aboutKeywords,
+            };
+
+            const detailImages = detail.images || [];
+            const cardImages = item.images || [];
+            const allImages = [...new Set([...detailImages, ...cardImages])].filter(Boolean);
+            if (allImages.length > 0) {
+              restaurant.images = allImages;
+            } else {
+              const fallbackImg = this.getCuisineImage(item.name, item.placeType, item.cuisineTypes);
+              if (fallbackImg) restaurant.images = [fallbackImg];
+            }
+
+            restaurant.distanceKm = this.calculateDistance(latitude, longitude, restaurant.location.latitude, restaurant.location.longitude);
+            results.push(restaurant);
+          }
+        } // end if/else basic vs intermediate/advanced
 
         await detailPage.close();
       } catch (pageErr: any) {
@@ -734,12 +803,28 @@ export class GoogleMapsScraperService {
     return results;
   }
 
-  async scrapeNearestRestaurants(latitude: number, longitude: number, limit: number = 10): Promise<ScrapedRestaurant[]> {
-    this.logger.log('Starting multi-engine search for Lat: ' + latitude + ', Lng: ' + longitude + ', Limit: ' + limit);
+  async scrapeNearestRestaurants(latitude: number, longitude: number, limit: number = 10, mode: ScrapingMode = 'intermediate'): Promise<ScrapedRestaurant[]> {
+    this.logger.log(`Starting multi-engine search [mode=${mode}] for Lat: ${latitude}, Lng: ${longitude}, Limit: ${limit}`);
+
+    // Basic mode: only use Google Maps list-page (fast, no OSM/Nominatim detail scraping)
+    if (mode === 'basic') {
+      const gmapResults = await this.scrapeGoogleMaps(latitude, longitude, limit, 'basic').catch(() => []);
+      const uniqueMap = new Map<string, ScrapedRestaurant>();
+      gmapResults.forEach((item) => {
+        const key = item.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (key && !uniqueMap.has(key)) uniqueMap.set(key, item);
+      });
+      const results = Array.from(uniqueMap.values());
+      results.sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
+      this.logger.log(`Basic mode returning ${results.length} restaurants.`);
+      return results;
+    }
+
+    // Intermediate / Advanced: full multi-engine scrape
     const [osmResults, nomResults, gmapResults] = await Promise.all([
       this.fetchOsmRestaurants(latitude, longitude, 10000, limit).catch(() => []),
       this.fetchNominatimRestaurants(latitude, longitude, limit).catch(() => []),
-      this.scrapeGoogleMaps(latitude, longitude, limit).catch(() => []),
+      this.scrapeGoogleMaps(latitude, longitude, limit, mode).catch(() => []),
     ]);
     const combined = [...gmapResults, ...nomResults, ...osmResults];
     const uniqueMap = new Map<string, ScrapedRestaurant>();
