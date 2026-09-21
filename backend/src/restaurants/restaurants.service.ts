@@ -171,9 +171,15 @@ export class RestaurantsService {
       this.logger.warn(`Failed to query PostgreSQL restaurants table: ${err.message}`);
     }
 
-    if (dbRestaurants.length >= limit) {
-      this.logger.log(`⚡ Instant response: Found ${dbRestaurants.length} cached restaurants in PostgreSQL (>= requested ${limit}).`);
-      const mapped = dbRestaurants.map((res) => this.entityToItem(res, dto.latitude, dto.longitude));
+    // Strict radial distance filter
+    const validDbRestaurants = dbRestaurants.filter((res) => {
+      const dist = this.calculateDistance(dto.latitude, dto.longitude, res.latitude, res.longitude);
+      return dist <= radiusKm;
+    });
+
+    if (validDbRestaurants.length >= limit) {
+      this.logger.log(`⚡ Instant response: Found ${validDbRestaurants.length} cached restaurants within ${radiusKm}km in PostgreSQL (>= requested ${limit}).`);
+      const mapped = validDbRestaurants.map((res) => this.entityToItem(res, dto.latitude, dto.longitude));
 
       const uniqueMapped: RestaurantItem[] = [];
       const seen = new Set<string>();
@@ -188,12 +194,16 @@ export class RestaurantsService {
       uniqueMapped.sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
       const topResults = uniqueMapped.slice(0, limit);
 
-      this.saveAndScrapeInBackground(dto.latitude, dto.longitude, limit, mode);
+      // Only run background scrape if requested mode is higher quality than cached records
+      const hasLowerLevel = validDbRestaurants.some(r => (r.scrapingLevel || 'basic') === 'basic' && mode !== 'basic');
+      if (hasLowerLevel) {
+        this.saveAndScrapeInBackground(dto.latitude, dto.longitude, limit, mode);
+      }
       return { restaurants: topResults, source: 'postgresql_database' };
     }
 
     // 2. Execute live scraping for requested limit
-    this.logger.log(`🔍 Live scraping for location (${dto.latitude}, ${dto.longitude}) [limit=${limit}, mode=${mode}]...`);
+    this.logger.log(`🔍 Live scraping for location (${dto.latitude}, ${dto.longitude}) [limit=${limit}, radius=${radiusKm}km, mode=${mode}]...`);
     let restaurants: RestaurantItem[] = [];
     let source = `google_maps_puppeteer_scraper_${mode}`;
 
@@ -201,7 +211,11 @@ export class RestaurantsService {
       const skipKeys = await this.getAdvancedKeys();
       const scraped = await this.scraperService.scrapeNearestRestaurants(dto.latitude, dto.longitude, limit, mode, skipKeys);
       if (scraped && scraped.length > 0) {
-        restaurants = scraped.map((s) => ({ ...s, scrapingLevel: mode }));
+        restaurants = scraped.map((s) => ({
+          ...s,
+          distanceKm: this.calculateDistance(dto.latitude, dto.longitude, s.location.latitude, s.location.longitude),
+          scrapingLevel: mode,
+        }));
       }
     } catch (err: any) {
       this.logger.warn(`Live scraper error: ${err.message}`);
@@ -211,14 +225,15 @@ export class RestaurantsService {
     // Save/upsert new scraped restaurants into PostgreSQL database without duplicates
     await this.upsertRestaurantsToDatabase(restaurants, mode);
 
-    // Deduplicate in memory
+    // Deduplicate in memory and enforce radius constraint
     const uniqueResults: RestaurantItem[] = [];
     const seen = new Set<string>();
     for (const item of restaurants) {
       const key = item.googleMapsUri || (item.name.toLowerCase().replace(/[^a-z0-9]/g, '') + '_' + (item.phone || ''));
-      if (!seen.has(key)) {
+      const dist = item.distanceKm ?? this.calculateDistance(dto.latitude, dto.longitude, item.location.latitude, item.location.longitude);
+      if (!seen.has(key) && dist <= radiusKm) {
         seen.add(key);
-        uniqueResults.push(item);
+        uniqueResults.push({ ...item, distanceKm: dist });
       }
     }
 
@@ -226,6 +241,7 @@ export class RestaurantsService {
     const topResults = uniqueResults.slice(0, limit);
 
     return { restaurants: topResults, source };
+
   }
 
   /**
@@ -471,14 +487,25 @@ export class RestaurantsService {
     }));
   }
 
-  /** Get all restaurants paginated for admin table (Max 50 per page) */
-  async getAllRestaurants(page: number = 1, pageSize: number = 50): Promise<{ data: RestaurantItem[]; total: number; page: number; pageSize: number }> {
-    const effectivePageSize = Math.min(pageSize, 50);
-    const [rows, total] = await this.restaurantRepository.findAndCount({
-      order: { createdAt: 'DESC' },
-      skip: (page - 1) * effectivePageSize,
-      take: effectivePageSize,
-    });
+  /** Get all restaurants paginated for admin table with optional search */
+  async getAllRestaurants(page: number = 1, pageSize: number = 50, search?: string): Promise<{ data: RestaurantItem[]; total: number; page: number; pageSize: number }> {
+    const effectivePageSize = Math.min(pageSize, 100);
+    const queryBuilder = this.restaurantRepository.createQueryBuilder('res');
+
+    if (search && search.trim()) {
+      const q = `%${search.trim().toLowerCase()}%`;
+      queryBuilder.where(
+        '(LOWER(res.name) LIKE :q OR LOWER(res.city) LIKE :q OR LOWER(res.cuisine) LIKE :q OR LOWER(res.address) LIKE :q)',
+        { q },
+      );
+    }
+
+    const [rows, total] = await queryBuilder
+      .orderBy('res.createdAt', 'DESC')
+      .skip((page - 1) * effectivePageSize)
+      .take(effectivePageSize)
+      .getManyAndCount();
+
     return {
       data: rows.map((r) => this.entityToItem(r)),
       total,
@@ -486,6 +513,7 @@ export class RestaurantsService {
       pageSize: effectivePageSize,
     };
   }
+
 
   /** Manually add a restaurant via admin */
   async adminAddRestaurant(data: Partial<RestaurantItem>): Promise<RestaurantItem> {
@@ -578,81 +606,172 @@ export class RestaurantsService {
     return { success: true };
   }
 
+
+
+  private isUpgrading = false;
+  private isResolvingCities = false;
+  private isDeduplicating = false;
+
   /**
    * Resolve postal codes: for records where `city` is null/empty or looks like a
    * postal code, reverse-geocode via Nominatim and save the real city name.
    */
   async resolvePostalCodeCities(): Promise<{ resolved: number; failed: number }> {
-    const allRecords = await this.restaurantRepository.find();
-    const toFix = allRecords.filter((r) => {
-      if (!r.city || r.city.trim() === '') return true;
-      return /^[\d\s\-]{3,10}$/.test(r.city.trim()) || /^\d{5}(-\d{4})?$/.test(r.city.trim());
-    });
-
-    this.logger.log(`resolvePostalCodeCities: ${toFix.length} records to fix`);
-    let resolved = 0;
-    let failed = 0;
-
-    for (const record of toFix) {
-      try {
-        const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${record.latitude}&lon=${record.longitude}&accept-language=en`;
-        const res = await fetch(url, { headers: { 'User-Agent': 'HotelRestaurantScraperBackend/1.0' } });
-        if (!res.ok) {
-          failed++;
-          continue;
-        }
-        const data: any = await res.json();
-        const addr = data.address || {};
-        const city = addr.city || addr.town || addr.village || addr.suburb || addr.county || '';
-        const country = addr.country || '';
-        if (city) {
-          record.city = city;
-          if (country && !record.country) record.country = country;
-          await this.restaurantRepository.save(record);
-          resolved++;
-        } else {
-          failed++;
-        }
-        await new Promise((r) => setTimeout(r, 1100));
-      } catch {
-        failed++;
-      }
+    if (this.isResolvingCities) {
+      this.logger.log('resolvePostalCodeCities is already running — ignoring duplicate request.');
+      return { resolved: 0, failed: 0 };
     }
+    this.isResolvingCities = true;
+    try {
+      const allRecords = await this.restaurantRepository.find();
+      const toFix = allRecords.filter((r) => {
+        if (!r.city || r.city.trim() === '') return true;
+        return /^[\d\s\-]{3,10}$/.test(r.city.trim()) || /^\d{5}(-\d{4})?$/.test(r.city.trim());
+      });
 
-    await this.deduplicateDatabase();
-    this.logger.log(`resolvePostalCodeCities: resolved=${resolved}, failed=${failed}`);
-    return { resolved, failed };
+      this.logger.log(`resolvePostalCodeCities: ${toFix.length} records to fix`);
+      let resolved = 0;
+      let failed = 0;
+
+      for (const record of toFix) {
+        try {
+          const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${record.latitude}&lon=${record.longitude}&accept-language=en`;
+          const res = await fetch(url, { headers: { 'User-Agent': 'HotelRestaurantScraperBackend/1.0' } });
+          if (!res.ok) {
+            failed++;
+            continue;
+          }
+          const data: any = await res.json();
+          const addr = data.address || {};
+          const city = addr.city || addr.town || addr.village || addr.suburb || addr.county || '';
+          const country = addr.country || '';
+          if (city) {
+            record.city = city;
+            if (country && !record.country) record.country = country;
+            await this.restaurantRepository.save(record);
+            resolved++;
+          } else {
+            failed++;
+          }
+          await new Promise((r) => setTimeout(r, 1100));
+        } catch {
+          failed++;
+        }
+      }
+
+      await this.deduplicateDatabase();
+      this.logger.log(`resolvePostalCodeCities: resolved=${resolved}, failed=${failed}`);
+      return { resolved, failed };
+    } finally {
+      this.isResolvingCities = false;
+    }
   }
 
   /**
    * Upgrade scraping level for existing records:
    */
   async upgradeScrapingLevel(targetLevel: 'intermediate' | 'advanced'): Promise<{ queued: number }> {
+    if (this.isUpgrading) {
+      this.logger.log(`upgradeScrapingLevel is already running — ignoring duplicate request.`);
+      return { queued: 0 };
+    }
+
     const levelsToUpgrade: string[] = targetLevel === 'advanced' ? ['basic', 'intermediate'] : ['basic'];
 
     const records = await this.restaurantRepository.find({
       where: { scrapingLevel: In(levelsToUpgrade) as any },
     });
 
-    this.logger.log(`upgradeScrapingLevel: queuing ${records.length} records for re-scraping at '${targetLevel}' level`);
+    this.logger.log(`upgradeScrapingLevel: queuing ${records.length} records for parallel re-scraping at '${targetLevel}' level`);
+    this.isUpgrading = true;
 
     setImmediate(async () => {
-      for (const record of records) {
-        try {
-          this.logger.log(`Re-scraping '${record.name}' at ${targetLevel} level...`);
-          const skipKeys = await this.getAdvancedKeys();
-          const scraped = await this.scraperService.scrapeNearestRestaurants(record.latitude, record.longitude, 1, targetLevel, skipKeys);
-          if (scraped && scraped.length > 0) {
-            await this.upsertRestaurantsToDatabase([{ ...scraped[0], id: record.id, scrapingLevel: targetLevel }], targetLevel);
-          }
-          await new Promise((r) => setTimeout(r, 500));
-        } catch (err: any) {
-          this.logger.warn(`Failed to upgrade scraping for '${record.name}': ${err.message}`);
+      try {
+        const BATCH_SIZE = 5; // process 5 restaurants in parallel at a time
+        // Cache skipKeys once — no need to hit DB for every restaurant
+        const skipKeys = await this.getAdvancedKeys();
+
+        for (let i = 0; i < records.length; i += BATCH_SIZE) {
+          const batch = records.slice(i, i + BATCH_SIZE);
+          this.logger.log(`upgradeScrapingLevel: batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(records.length / BATCH_SIZE)} — scraping ${batch.length} restaurants in parallel...`);
+
+          await Promise.all(batch.map(async (record) => {
+            try {
+              this.logger.log(`Re-scraping '${record.name}' at ${targetLevel} level...`);
+              const scraped = await this.scraperService.scrapeNearestRestaurants(
+                record.latitude, record.longitude, 1, targetLevel, skipKeys, record.name,
+              );
+              if (scraped && scraped.length > 0) {
+                const matched = scraped.find(s => s.name.toLowerCase().replace(/[^a-z0-9]/g, '') === record.normalizedName) || scraped[0];
+                await this.upsertRestaurantsToDatabase([{ ...matched, id: record.id, scrapingLevel: targetLevel }], targetLevel);
+              }
+            } catch (err: any) {
+              this.logger.warn(`Failed to upgrade scraping for '${record.name}': ${err.message}`);
+            }
+          }));
         }
+
+        this.logger.log(`upgradeScrapingLevel: done upgrading ${records.length} records to '${targetLevel}'.`);
+      } finally {
+        this.isUpgrading = false;
       }
-      this.logger.log(`upgradeScrapingLevel: done upgrading ${records.length} records to '${targetLevel}'.`);
     });
 
     return { queued: records.length };
   }
+
+  async upgradeSingleRestaurant(id: string, targetLevel: 'intermediate' | 'advanced'): Promise<{ success: boolean; message: string }> {
+    const record = await this.restaurantRepository.findOne({ where: { id } });
+    if (!record) {
+      return { success: false, message: 'Restaurant not found' };
+    }
+
+    if (record.scrapingLevel === 'advanced' || (record.scrapingLevel === 'intermediate' && targetLevel === 'intermediate')) {
+      return { success: false, message: `Restaurant is already at ${record.scrapingLevel} level` };
+    }
+
+    const skipKeys = await this.getAdvancedKeys();
+    try {
+      this.logger.log(`upgradeSingleRestaurant: Re-scraping '${record.name}' at ${targetLevel} level...`);
+      const scraped = await this.scraperService.scrapeNearestRestaurants(
+        record.latitude, record.longitude, 1, targetLevel, skipKeys, record.name,
+      );
+      if (scraped && scraped.length > 0) {
+        const matched = scraped.find(s => s.name.toLowerCase().replace(/[^a-z0-9]/g, '') === record.normalizedName) || scraped[0];
+        await this.upsertRestaurantsToDatabase([{ ...matched, id: record.id, scrapingLevel: targetLevel }], targetLevel);
+        return { success: true, message: 'Restaurant upgraded successfully' };
+      }
+      return { success: false, message: 'Failed to find restaurant during scraping' };
+    } catch (err: any) {
+      this.logger.warn(`upgradeSingleRestaurant: Failed for '${record.name}': ${err.message}`);
+      return { success: false, message: `Scraping error: ${err.message}` };
+    }
+  }
+
+  /**
+   * Merge city names: changes all records with `fromCity` to `toCity` and runs deduplication.
+   */
+  async mergeCities(fromCity: string, toCity: string): Promise<{ updated: number }> {
+    if (!fromCity || !toCity || fromCity.trim() === '' || toCity.trim() === '') {
+      return { updated: 0 };
+    }
+    const targetFrom = fromCity.trim();
+    const targetTo = toCity.trim();
+
+    const records = await this.restaurantRepository
+      .createQueryBuilder('res')
+      .where('LOWER(res.city) = LOWER(:fromCity)', { fromCity: targetFrom })
+      .getMany();
+
+    this.logger.log(`mergeCities: updating ${records.length} records from '${targetFrom}' to '${targetTo}'`);
+
+    for (const record of records) {
+      record.city = targetTo;
+      await this.restaurantRepository.save(record);
+    }
+
+    await this.deduplicateDatabase();
+    return { updated: records.length };
+  }
 }
+

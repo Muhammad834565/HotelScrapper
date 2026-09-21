@@ -27,6 +27,8 @@ import {
   Restaurant,
   ScrapingMode,
   fetchNearestRestaurants,
+  getAuthToken,
+  removeAuthToken,
 } from '../lib/api';
 
 const SCRAPING_MODES: { mode: ScrapingMode; label: string; desc: string; icon: React.ReactNode; color: string }[] = [
@@ -55,6 +57,15 @@ const SCRAPING_MODES: { mode: ScrapingMode; label: string; desc: string; icon: R
 
 export default function Home() {
   const router = useRouter();
+
+  // Protect page with token check
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) {
+      router.push('/login');
+    }
+  }, [router]);
+
 
   const [location, setLocation] = useState<{ latitude: number; longitude: number }>({
     latitude: 24.8607,
@@ -91,8 +102,7 @@ export default function Home() {
     setError(null);
     setCurrentPage(1);
     try {
-      const fetchLimit = Math.min(limit, 30); // Max 30 per requirement
-      const data = await fetchNearestRestaurants(lat, lng, rad, fetchLimit, mode);
+      const data = await fetchNearestRestaurants(lat, lng, rad, limit, mode);
       setRestaurants(data.restaurants || []);
     } catch (err: any) {
       setError(
@@ -102,6 +112,7 @@ export default function Home() {
       setLoading(false);
     }
   };
+
 
   const handleLocationSelect = (lat: number, lng: number, name: string) => {
     const shortName = name.split(',').slice(0, 2).join(',').trim();
@@ -174,14 +185,27 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Header Action: Admin Page Toggle */}
-        <button
-          onClick={() => router.push('/admin')}
-          className="z-10 flex items-center gap-2 px-5 py-2.5 rounded-2xl font-bold text-xs bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-lg shadow-purple-900/40 border border-purple-400/30 transition-all transform hover:scale-105 active:scale-95"
-        >
-          <ShieldCheck className="w-4 h-4 text-purple-200" />
-          <span>Admin Panel</span>
-        </button>
+        {/* Header Actions */}
+        <div className="flex items-center gap-2 z-10">
+          <button
+            onClick={() => router.push('/admin')}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-2xl font-bold text-xs bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-lg shadow-purple-900/40 border border-purple-400/30 transition-all transform hover:scale-105 active:scale-95"
+          >
+            <ShieldCheck className="w-4 h-4 text-purple-200" />
+            <span>Admin Panel</span>
+          </button>
+          <button
+            onClick={() => {
+              removeAuthToken();
+              router.push('/login');
+            }}
+            className="flex items-center gap-1.5 px-4 py-2.5 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 text-xs font-bold transition-all"
+          >
+            <Lock className="w-4 h-4" />
+            <span>Logout</span>
+          </button>
+        </div>
+
       </header>
 
       {/* ─── Search & Controls ────────────────────────────────────────── */}

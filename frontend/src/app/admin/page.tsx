@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, Database, Building2, BarChart3, RefreshCw, Trash2,
@@ -13,7 +13,7 @@ import {
   Restaurant, AdminStats, AdminListResponse, ScrapingMode,
   adminGetStats, adminGetAll, adminAddRestaurant, adminEditRestaurant,
   adminDeleteRestaurant, adminResolveCities, adminUpgradeScraping, adminDeduplicate,
-  adminGetCities,
+  adminGetCities, getAuthToken, removeAuthToken, adminMergeCities,
 } from '../../lib/api';
 
 const PAGE_SIZE = 50;
@@ -48,18 +48,43 @@ function ScrapingBadge({ level }: { level?: ScrapingMode }) {
   );
 }
 
-// ─── Cities List Modal ───────────────────────────────────────────────────
+// ─── Cities List Modal with Merge / Swap Feature ───────────────────────────
 
 interface CitiesModalProps {
   cities: { city: string; count: number }[];
   onSelectCity: (cityName: string) => void;
+  onRefreshCities: () => void;
   onClose: () => void;
+  showToast: (msg: string, type?: 'success' | 'error') => void;
 }
 
-function CitiesListModal({ cities, onSelectCity, onClose }: CitiesModalProps) {
+function CitiesListModal({ cities, onSelectCity, onRefreshCities, onClose, showToast }: CitiesModalProps) {
   const [filter, setFilter] = useState('');
+  const [mergingCity, setMergingCity] = useState<string | null>(null);
+  const [targetCityInput, setTargetCityInput] = useState('');
+  const [processing, setProcessing] = useState(false);
 
   const filtered = cities.filter((c) => c.city.toLowerCase().includes(filter.toLowerCase()));
+
+  const handleMergeSubmit = async (fromCity: string) => {
+    const toCity = targetCityInput.trim();
+    if (!toCity || toCity.toLowerCase() === fromCity.toLowerCase()) {
+      showToast('Please enter a valid, different target city name to merge into.', 'error');
+      return;
+    }
+    setProcessing(true);
+    try {
+      const res = await adminMergeCities(fromCity, toCity);
+      showToast(`Successfully merged ${res.updated} restaurants from '${fromCity}' into '${toCity}'!`);
+      setMergingCity(null);
+      setTargetCityInput('');
+      onRefreshCities();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to merge cities', 'error');
+    } finally {
+      setProcessing(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
@@ -72,7 +97,7 @@ function CitiesListModal({ cities, onSelectCity, onClose }: CitiesModalProps) {
             </div>
             <div>
               <h3 className="text-lg font-bold text-white">Cities in Database ({cities.length})</h3>
-              <p className="text-xs text-gray-400">Click any city to filter the main restaurant table</p>
+              <p className="text-xs text-gray-400">Click to filter or click Merge/Swap to unify city entries (e.g. Lahore Cant → Lahore)</p>
             </div>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800 transition-colors">
@@ -94,27 +119,66 @@ function CitiesListModal({ cities, onSelectCity, onClose }: CitiesModalProps) {
         </div>
 
         {/* City Grid */}
-        <div className="overflow-y-auto p-5 grid grid-cols-1 sm:grid-cols-2 gap-3 flex-1">
+        <div className="overflow-y-auto p-5 grid grid-cols-1 gap-3 flex-1">
           {filtered.length === 0 ? (
-            <div className="col-span-2 py-8 text-center text-gray-500 text-xs">No matching cities found.</div>
+            <div className="py-8 text-center text-gray-500 text-xs">No matching cities found.</div>
           ) : (
             filtered.map((item) => (
-              <button
+              <div
                 key={item.city}
-                onClick={() => {
-                  onSelectCity(item.city);
-                  onClose();
-                }}
-                className="flex items-center justify-between p-3.5 rounded-xl bg-gray-900/70 border border-white/5 hover:border-amber-500/40 hover:bg-amber-500/10 transition-all text-left group"
+                className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 rounded-xl bg-gray-900/70 border border-white/5 hover:border-amber-500/30 transition-all gap-3"
               >
-                <div className="flex items-center gap-2">
+                <div
+                  onClick={() => {
+                    onSelectCity(item.city);
+                    onClose();
+                  }}
+                  className="flex items-center gap-3 cursor-pointer group flex-1"
+                >
                   <MapPin className="w-4 h-4 text-amber-400 shrink-0" />
                   <span className="font-semibold text-white group-hover:text-amber-300 text-xs">{item.city}</span>
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold">
+                    {item.count} places
+                  </span>
                 </div>
-                <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[11px] font-bold">
-                  {item.count} places
-                </span>
-              </button>
+
+                {/* Merge / Swap Controls */}
+                {mergingCity === item.city ? (
+                  <div className="flex items-center gap-2 w-full sm:w-auto mt-2 sm:mt-0">
+                    <input
+                      type="text"
+                      value={targetCityInput}
+                      onChange={(e) => setTargetCityInput(e.target.value)}
+                      placeholder="Merge into (e.g. Lahore)"
+                      className="bg-gray-950 border border-amber-500/40 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none w-44"
+                    />
+                    <button
+                      disabled={processing}
+                      onClick={() => handleMergeSubmit(item.city)}
+                      className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors flex items-center gap-1 disabled:opacity-50"
+                    >
+                      {processing ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Swap'}
+                    </button>
+                    <button
+                      onClick={() => setMergingCity(null)}
+                      className="px-2 py-1 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400 text-xs"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setMergingCity(item.city);
+                      setTargetCityInput(item.city.includes('Cant') ? item.city.replace(/cant.*/i, '').trim() : '');
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-amber-500/20 hover:text-amber-300 border border-white/10 text-gray-300 text-xs font-semibold transition-all self-end sm:self-auto"
+                  >
+                    <RefreshCw className="w-3 h-3 text-amber-400" />
+                    Merge / Swap
+                  </button>
+                )}
+              </div>
             ))
           )}
         </div>
@@ -122,6 +186,7 @@ function CitiesListModal({ cities, onSelectCity, onClose }: CitiesModalProps) {
     </div>
   );
 }
+
 
 // ─── Restaurant Details Modal ("See" Button) ──────────────────────────────
 
@@ -480,11 +545,20 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 export default function AdminPage() {
   const router = useRouter();
 
+  // Protect admin page with token check
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) {
+      router.push('/login');
+    }
+  }, [router]);
+
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
 
   const [citiesList, setCitiesList] = useState<{ city: string; count: number }[]>([]);
   const [citiesModalOpen, setCitiesModalOpen] = useState(false);
+
 
   const [listData, setListData] = useState<AdminListResponse | null>(null);
   const [page, setPage] = useState(1);
@@ -525,22 +599,44 @@ export default function AdminPage() {
     }
   }, []);
 
-  const loadList = useCallback(async (p: number = page) => {
+  const loadList = useCallback(async (p: number, searchKeyword: string) => {
     setLoading(true);
     try {
-      const data = await adminGetAll(p, PAGE_SIZE);
+      const data = await adminGetAll(p, PAGE_SIZE, searchKeyword);
       setListData(data);
     } catch (err: any) {
       showToast('Failed to load restaurant list', 'error');
     } finally {
       setLoading(false);
     }
-  }, [page]);
+  }, []);
 
+  // Initial load
   useEffect(() => {
     loadStats();
-    loadList(1);
-  }, [loadStats, loadList]);
+    loadList(1, '');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Debounced server-side search: reset page to 1 on new keyword
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => {
+      setPage(1);
+      loadList(1, search);
+    }, 350);
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+  }, [search, loadList]);
+
+  // Reload on page change
+  useEffect(() => {
+    loadList(page, search);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
+
 
   const handleAdd = async (formData: Partial<Restaurant>) => {
     setSaving(true);
@@ -549,7 +645,7 @@ export default function AdminPage() {
       showToast('Restaurant added successfully!');
       setAddOpen(false);
       loadStats();
-      loadList(1);
+      loadList(1, search);
     } catch (err: any) {
       showToast(err.message || 'Failed to add restaurant', 'error');
     } finally {
@@ -565,7 +661,7 @@ export default function AdminPage() {
       showToast('Restaurant updated successfully!');
       setEditTarget(null);
       loadStats();
-      loadList();
+      loadList(page, search);
     } catch (err: any) {
       showToast(err.message || 'Failed to edit restaurant', 'error');
     } finally {
@@ -581,7 +677,7 @@ export default function AdminPage() {
       showToast('Restaurant deleted successfully!');
       setDeleteTarget(null);
       loadStats();
-      loadList();
+      loadList(page, search);
     } catch (err: any) {
       showToast(err.message || 'Failed to delete restaurant', 'error');
     } finally {
@@ -595,7 +691,7 @@ export default function AdminPage() {
       const res = await adminResolveCities();
       showToast(`Resolved ${res.resolved} cities (Failed: ${res.failed})`);
       loadStats();
-      loadList(1);
+      loadList(1, search);
     } catch (err: any) {
       showToast('Failed to resolve cities', 'error');
     } finally {
@@ -609,7 +705,7 @@ export default function AdminPage() {
       const res = await adminDeduplicate();
       showToast(`Merged ${res.merged} groups, deleted ${res.deleted} duplicate rows!`);
       loadStats();
-      loadList(1);
+      loadList(1, search);
     } catch (err: any) {
       showToast('Failed to deduplicate database', 'error');
     } finally {
@@ -629,29 +725,20 @@ export default function AdminPage() {
     }
   };
 
-  // Filter & Sort Logic
+  // Filter & Sort Logic (search is server-side; level/city/null filters are client-side)
   const rawRows = listData?.data || [];
   let filteredRows = rawRows.filter((r) => {
-    // 1. Text Search
-    if (search) {
-      const q = search.toLowerCase();
-      const matchName = r.name.toLowerCase().includes(q);
-      const matchCity = r.city && r.city.toLowerCase().includes(q);
-      const matchCuisine = r.cuisine && r.cuisine.toLowerCase().includes(q);
-      if (!matchName && !matchCity && !matchCuisine) return false;
-    }
-
-    // 2. Scraping Level Filter
+    // 1. Scraping Level Filter
     if (levelFilter !== 'all') {
       if ((r.scrapingLevel || 'basic') !== levelFilter) return false;
     }
 
-    // 3. City Filter
+    // 2. City Filter
     if (cityFilter !== 'all') {
       if ((r.city || '').toLowerCase() !== cityFilter.toLowerCase()) return false;
     }
 
-    // 4. Null Values Filter
+    // 3. Null Values Filter
     if (nullFilter === 'missing_city' && r.city) return false;
     if (nullFilter === 'missing_phone' && r.phone) return false;
     if (nullFilter === 'missing_website' && r.website) return false;
@@ -716,7 +803,7 @@ export default function AdminPage() {
           <button
             onClick={() => {
               loadStats();
-              loadList();
+              loadList(page, search);
             }}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold border border-white/10 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white transition-colors"
           >
@@ -729,7 +816,17 @@ export default function AdminPage() {
           >
             <Plus className="w-4 h-4" /> Add Restaurant
           </button>
+          <button
+            onClick={() => {
+              removeAuthToken();
+              router.push('/login');
+            }}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 text-xs font-bold transition-colors"
+          >
+            <Lock className="w-3.5 h-3.5" /> Logout
+          </button>
         </div>
+
       </header>
 
       {/* ── Stats Cards ── */}
@@ -1065,7 +1162,6 @@ export default function AdminPage() {
                 onClick={() => {
                   const newP = Math.max(1, page - 1);
                   setPage(newP);
-                  loadList(newP);
                 }}
                 disabled={page <= 1}
                 className="p-1.5 rounded-lg border border-white/10 text-gray-400 hover:text-white hover:border-white/20 disabled:opacity-30 transition-colors"
@@ -1076,7 +1172,6 @@ export default function AdminPage() {
                 onClick={() => {
                   const newP = Math.min(totalPages, page + 1);
                   setPage(newP);
-                  loadList(newP);
                 }}
                 disabled={page >= totalPages}
                 className="p-1.5 rounded-lg border border-white/10 text-gray-400 hover:text-white hover:border-white/20 disabled:opacity-30 transition-colors"
@@ -1096,9 +1191,15 @@ export default function AdminPage() {
             setCityFilter(cityName);
             showToast(`Filtering by city: ${cityName}`);
           }}
+          onRefreshCities={() => {
+            loadStats();
+            loadList(1, search);
+          }}
           onClose={() => setCitiesModalOpen(false)}
+          showToast={showToast}
         />
       )}
+
 
       {/* ── View Details Modal ("See" Button) ── */}
       {viewTarget && <RestaurantDetailsModal restaurant={viewTarget} onClose={() => setViewTarget(null)} />}

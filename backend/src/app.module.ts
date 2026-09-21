@@ -3,6 +3,8 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { RestaurantsModule } from './restaurants/restaurants.module';
 import { RestaurantEntity } from './restaurants/entities/restaurant.entity';
+import { AuthController } from './auth/auth.controller';
+import { AuthGuard } from './auth/auth.guard';
 
 @Module({
   imports: [
@@ -29,5 +31,8 @@ import { RestaurantEntity } from './restaurants/entities/restaurant.entity';
     }),
     RestaurantsModule,
   ],
+  controllers: [AuthController],
+  providers: [AuthGuard],
 })
 export class AppModule {}
+

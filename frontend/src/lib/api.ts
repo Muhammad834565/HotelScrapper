@@ -57,6 +57,61 @@ export interface AdminListResponse {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
 
+export function getAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('auth_token');
+}
+
+export function setAuthToken(token: string) {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('auth_token', token);
+  }
+}
+
+export function removeAuthToken() {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('auth_token');
+  }
+}
+
+export function getAuthHeaders(): Record<string, string> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+export async function loginUser(username: string, password: string): Promise<{ success: boolean; token: string; username: string }> {
+  const res = await fetch(`${API_BASE_URL}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: 'Login failed' }));
+    throw new Error(err.message || 'Invalid username or password');
+  }
+  const data = await res.json();
+  if (data.token) {
+    setAuthToken(data.token);
+  }
+  return data;
+}
+
+export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const headers = { ...getAuthHeaders(), ...(options.headers || {}) };
+  const res = await fetch(url, { ...options, headers });
+  if (res.status === 401) {
+    removeAuthToken();
+    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+      window.location.href = '/login';
+    }
+  }
+  return res;
+}
+
 export async function fetchNearestRestaurants(
   latitude: number,
   longitude: number,
@@ -65,9 +120,8 @@ export async function fetchNearestRestaurants(
   scrapingMode: ScrapingMode = 'basic',
 ): Promise<SearchNearbyResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/restaurants/nearby`, {
+    const res = await authFetch(`${API_BASE_URL}/restaurants/nearby`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ latitude, longitude, radius, limit, scrapingMode }),
     });
     if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
@@ -82,7 +136,7 @@ export async function geocodeLocation(
   query: string,
 ): Promise<{ latitude: number; longitude: number; displayName: string } | null> {
   try {
-    const res = await fetch(`${API_BASE_URL}/restaurants/geocode?q=${encodeURIComponent(query)}`);
+    const res = await authFetch(`${API_BASE_URL}/restaurants/geocode?q=${encodeURIComponent(query)}`);
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) {
@@ -105,7 +159,7 @@ export async function geocodeLocation(
 export async function geocodeSuggestions(query: string): Promise<GeocodeSuggestion[]> {
   if (!query || query.trim().length < 2) return [];
   try {
-    const res = await fetch(`${API_BASE_URL}/restaurants/geocode?q=${encodeURIComponent(query)}`);
+    const res = await authFetch(`${API_BASE_URL}/restaurants/geocode?q=${encodeURIComponent(query)}`);
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) return data.slice(0, 6);
@@ -132,27 +186,28 @@ export async function geocodeSuggestions(query: string): Promise<GeocodeSuggesti
 // ─── Admin API helpers ────────────────────────────────────────────────────
 
 export async function adminGetStats(): Promise<AdminStats> {
-  const res = await fetch(`${API_BASE_URL}/restaurants/admin/stats`);
+  const res = await authFetch(`${API_BASE_URL}/restaurants/admin/stats`);
   if (!res.ok) throw new Error(`Stats fetch failed: ${res.status}`);
   return res.json();
 }
 
 export async function adminGetCities(): Promise<{ city: string; count: number }[]> {
-  const res = await fetch(`${API_BASE_URL}/restaurants/admin/cities`);
+  const res = await authFetch(`${API_BASE_URL}/restaurants/admin/cities`);
   if (!res.ok) throw new Error(`Cities fetch failed: ${res.status}`);
   return res.json();
 }
 
-export async function adminGetAll(page = 1, pageSize = 50): Promise<AdminListResponse> {
-  const res = await fetch(`${API_BASE_URL}/restaurants/admin/all?page=${page}&pageSize=${pageSize}`);
+export async function adminGetAll(page = 1, pageSize = 50, search = ''): Promise<AdminListResponse> {
+  const url = `${API_BASE_URL}/restaurants/admin/all?page=${page}&pageSize=${pageSize}${search ? `&search=${encodeURIComponent(search)}` : ''}`;
+  const res = await authFetch(url);
   if (!res.ok) throw new Error(`List fetch failed: ${res.status}`);
   return res.json();
 }
 
+
 export async function adminAddRestaurant(data: Partial<Restaurant>): Promise<Restaurant> {
-  const res = await fetch(`${API_BASE_URL}/restaurants/admin/add`, {
+  const res = await authFetch(`${API_BASE_URL}/restaurants/admin/add`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   if (!res.ok) throw new Error(`Add failed: ${res.status}`);
@@ -160,9 +215,8 @@ export async function adminAddRestaurant(data: Partial<Restaurant>): Promise<Res
 }
 
 export async function adminEditRestaurant(id: string, data: Partial<Restaurant>): Promise<Restaurant> {
-  const res = await fetch(`${API_BASE_URL}/restaurants/admin/${id}`, {
+  const res = await authFetch(`${API_BASE_URL}/restaurants/admin/${id}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   if (!res.ok) throw new Error(`Edit failed: ${res.status}`);
@@ -170,28 +224,45 @@ export async function adminEditRestaurant(id: string, data: Partial<Restaurant>)
 }
 
 export async function adminDeleteRestaurant(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/restaurants/admin/${id}`, { method: 'DELETE' });
+  const res = await authFetch(`${API_BASE_URL}/restaurants/admin/${id}`, {
+    method: 'DELETE',
+  });
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
 }
 
 export async function adminResolveCities(): Promise<{ resolved: number; failed: number }> {
-  const res = await fetch(`${API_BASE_URL}/restaurants/admin/resolve-cities`, { method: 'POST' });
+  const res = await authFetch(`${API_BASE_URL}/restaurants/admin/resolve-cities`, {
+    method: 'POST',
+  });
   if (!res.ok) throw new Error(`Resolve cities failed: ${res.status}`);
   return res.json();
 }
 
 export async function adminDeduplicate(): Promise<{ merged: number; deleted: number }> {
-  const res = await fetch(`${API_BASE_URL}/restaurants/admin/deduplicate`, { method: 'POST' });
+  const res = await authFetch(`${API_BASE_URL}/restaurants/admin/deduplicate`, {
+    method: 'POST',
+  });
   if (!res.ok) throw new Error(`Deduplicate failed: ${res.status}`);
   return res.json();
 }
 
 export async function adminUpgradeScraping(targetLevel: 'intermediate' | 'advanced'): Promise<{ queued: number }> {
-  const res = await fetch(`${API_BASE_URL}/restaurants/admin/upgrade-scraping`, {
+  const res = await authFetch(`${API_BASE_URL}/restaurants/admin/upgrade-scraping`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ targetLevel }),
   });
   if (!res.ok) throw new Error(`Upgrade scraping failed: ${res.status}`);
   return res.json();
 }
+
+export async function adminMergeCities(fromCity: string, toCity: string): Promise<{ updated: number }> {
+  const res = await authFetch(`${API_BASE_URL}/restaurants/admin/merge-cities`, {
+    method: 'POST',
+    body: JSON.stringify({ fromCity, toCity }),
+  });
+  if (!res.ok) throw new Error(`Merge cities failed: ${res.status}`);
+  return res.json();
+}
+
+
+

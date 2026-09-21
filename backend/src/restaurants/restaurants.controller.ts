@@ -1,12 +1,15 @@
 import {
   Controller, Post, Get, Patch, Delete,
-  Body, Query, Param, HttpCode, HttpStatus,
+  Body, Query, Param, HttpCode, HttpStatus, UseGuards,
 } from '@nestjs/common';
 import { RestaurantsService } from './restaurants.service';
 import { SearchLocationDto } from './dto/search-location.dto';
+import { AuthGuard } from '../auth/auth.guard';
 
 @Controller('restaurants')
+@UseGuards(AuthGuard)
 export class RestaurantsController {
+
   constructor(private readonly restaurantsService: RestaurantsService) { }
 
   // ─── Public endpoints ───────────────────────────────────────────────────
@@ -36,17 +39,20 @@ export class RestaurantsController {
     return this.restaurantsService.getAdminCities();
   }
 
-  /** GET /restaurants/admin/all?page=1&pageSize=50 — Paginated list */
+  /** GET /restaurants/admin/all?page=1&pageSize=50&search=... — Paginated list */
   @Get('admin/all')
   async adminAll(
     @Query('page') page: string = '1',
     @Query('pageSize') pageSize: string = '50',
+    @Query('search') search?: string,
   ) {
     return this.restaurantsService.getAllRestaurants(
       Math.max(1, parseInt(page, 10) || 1),
       Math.min(200, parseInt(pageSize, 10) || 50),
+      search,
     );
   }
+
 
   /** POST /restaurants/admin/add — Manually add a restaurant */
   @Post('admin/add')
@@ -89,6 +95,17 @@ export class RestaurantsController {
   }
 
   /**
+   * POST /restaurants/admin/merge-cities
+   * Body: { fromCity: string, toCity: string }
+   * Merges all restaurants in fromCity into toCity (e.g. Lahore Cant -> Lahore)
+   */
+  @Post('admin/merge-cities')
+  @HttpCode(HttpStatus.OK)
+  async adminMergeCities(@Body() body: { fromCity: string; toCity: string }) {
+    return this.restaurantsService.mergeCities(body.fromCity, body.toCity);
+  }
+
+  /**
    * POST /restaurants/admin/upgrade-scraping
    * Body: { targetLevel: 'intermediate' | 'advanced' }
    * Re-scrapes qualifying restaurants at higher quality. Runs in background.
@@ -98,4 +115,16 @@ export class RestaurantsController {
   async adminUpgradeScraping(@Body() body: { targetLevel: 'intermediate' | 'advanced' }) {
     return this.restaurantsService.upgradeScrapingLevel(body.targetLevel || 'intermediate');
   }
+
+  /**
+   * POST /restaurants/admin/:id/upgrade-scraping
+   * Body: { targetLevel: 'intermediate' | 'advanced' }
+   * Upgrades a single restaurant synchronously.
+   */
+  @Post('admin/:id/upgrade-scraping')
+  @HttpCode(HttpStatus.OK)
+  async adminUpgradeSingleScraping(@Param('id') id: string, @Body() body: { targetLevel: 'intermediate' | 'advanced' }) {
+    return this.restaurantsService.upgradeSingleRestaurant(id, body.targetLevel || 'advanced');
+  }
 }
+

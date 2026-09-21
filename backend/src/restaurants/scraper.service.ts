@@ -36,7 +36,48 @@ export interface ScrapedRestaurant {
 @Injectable()
 export class GoogleMapsScraperService {
   private readonly logger = new Logger(GoogleMapsScraperService.name);
-  private isScrapingBusy = false;
+  private isScrapingBusy = false; // kept for backward compat (unused now)
+  private activeSlots = 0;
+  private readonly MAX_CONCURRENT_SCRAPES = 5; // run up to 5 restaurants in parallel
+  private sharedBrowser: puppeteer.Browser | null = null;
+  private browserUseCount = 0;
+  private readonly BROWSER_RECYCLE_AFTER = 20; // recycle browser every N scrapes to avoid memory leaks
+
+  private async getOrCreateBrowser(): Promise<puppeteer.Browser> {
+    if (this.sharedBrowser && this.sharedBrowser.connected && this.browserUseCount < this.BROWSER_RECYCLE_AFTER) {
+      this.browserUseCount++;
+      return this.sharedBrowser;
+    }
+    // Close old browser if exists
+    if (this.sharedBrowser) {
+      await this.sharedBrowser.close().catch(() => {});
+      this.sharedBrowser = null;
+    }
+    const browserArgs = [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--lang=en-US,en',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-infobars',
+      '--window-size=1280,900',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-extensions',
+    ];
+    try {
+      this.sharedBrowser = await puppeteer.launch({ headless: true, args: browserArgs });
+    } catch {
+      try {
+        this.sharedBrowser = await puppeteer.launch({ headless: true, channel: 'chrome', args: browserArgs });
+      } catch {
+        this.sharedBrowser = await puppeteer.launch({ headless: true, channel: 'msedge' as any, args: browserArgs });
+      }
+    }
+    this.browserUseCount = 1;
+    return this.sharedBrowser;
+  }
 
   private calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
     const R = 6371;
@@ -110,9 +151,9 @@ export class GoogleMapsScraperService {
     coordLng?: number;
   }> {
     try {
-      await page.goto(detailUrl, { waitUntil: 'domcontentloaded', timeout: 18000 });
-      await page.waitForSelector('[data-item-id], .rogA2c, .DUwDvf', { timeout: 8000 }).catch(() => { });
-      await new Promise((r) => setTimeout(r, 1500));
+      await page.goto(detailUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await page.waitForSelector('[data-item-id], .rogA2c, .DUwDvf', { timeout: 5000 }).catch(() => { });
+      await new Promise((r) => setTimeout(r, 600));
 
       const data = await page.evaluate(() => {
         const result: any = {};
@@ -222,7 +263,7 @@ export class GoogleMapsScraperService {
         if (aboutTab) (aboutTab as HTMLElement).click();
       });
       // Wait for tab transition and about section content to render
-      await new Promise(r => setTimeout(r, 2500));
+      await new Promise(r => setTimeout(r, 1200));
 
       // Scroll the main panel to load lazy items
       await page.evaluate(() => {
@@ -231,7 +272,7 @@ export class GoogleMapsScraperService {
           panel.scrollTop = panel.scrollHeight;
         }
       });
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 600));
 
       const aboutExtracted = await page.evaluate(() => {
         const aboutSection: Record<string, string[]> = {};
@@ -348,7 +389,7 @@ export class GoogleMapsScraperService {
         const menuTab = tabs.find(t => t.textContent?.toLowerCase().includes('menu'));
         if (menuTab) (menuTab as HTMLElement).click();
       });
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 800));
 
       const menuExtracted = await page.evaluate(() => {
         const items: any[] = [];
@@ -520,43 +561,20 @@ export class GoogleMapsScraperService {
     limit: number = 50,
     mode: ScrapingMode = 'intermediate',
     skipAdvancedKeys: Set<string> = new Set(),
+    targetName?: string,
   ): Promise<ScrapedRestaurant[]> {
-    if (this.isScrapingBusy) {
-      this.logger.log('Scraper busy with another request — waiting for previous scrape job...');
-      while (this.isScrapingBusy) {
-        await new Promise((r) => setTimeout(r, 1000));
-      }
+    // Semaphore: wait if already at max concurrent scrapes
+    while (this.activeSlots >= this.MAX_CONCURRENT_SCRAPES) {
+      await new Promise((r) => setTimeout(r, 200));
     }
-    this.isScrapingBusy = true;
+    this.activeSlots++;
 
-    this.logger.log(`Launching Puppeteer [mode=${mode}] for Google Maps near Lat: ${latitude}, Lng: ${longitude}`);
+    this.logger.log(`Launching Puppeteer [mode=${mode}] for Google Maps near Lat: ${latitude}, Lng: ${longitude}${targetName ? ` [Target: ${targetName}]` : ''}`);
     let browser: puppeteer.Browser | null = null;
     const results: ScrapedRestaurant[] = [];
 
-    const browserArgs = [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--lang=en-US,en',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-infobars',
-      '--window-size=1280,900',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-extensions',
-    ];
-
     try {
-      try {
-        browser = await puppeteer.launch({ headless: true, args: browserArgs });
-      } catch {
-        try {
-          browser = await puppeteer.launch({ headless: true, channel: 'chrome', args: browserArgs });
-        } catch {
-          browser = await puppeteer.launch({ headless: true, channel: 'msedge' as any, args: browserArgs });
-        }
-      }
+      browser = await this.getOrCreateBrowser();
 
       const listPage = await browser.newPage();
       await listPage.setViewport({ width: 1280, height: 900 });
@@ -567,11 +585,13 @@ export class GoogleMapsScraperService {
         (window as any).chrome = { runtime: {} };
       });
 
-      const searchUrl = 'https://www.google.com/maps/search/restaurants/@' + latitude + ',' + longitude + ',14z?hl=en';
+      const queryTerm = targetName ? encodeURIComponent(targetName) : 'restaurants';
+      const searchUrl = 'https://www.google.com/maps/search/' + queryTerm + '/@' + latitude + ',' + longitude + ',14z?hl=en';
 
       try {
-        await listPage.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-        await new Promise((r) => setTimeout(r, 2500));
+        await listPage.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+        await new Promise((r) => setTimeout(r, 1000));
+
 
         // ---- Advanced mode: inject stored Google session cookies ----
         if (mode === 'advanced') {
@@ -580,8 +600,8 @@ export class GoogleMapsScraperService {
             await listPage.setCookie(...cookies);
             this.logger.log(`Advanced mode: injected ${cookies.length} Google session cookies.`);
             // Reload with cookies active so Google recognises the session
-            await listPage.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-            await new Promise((r) => setTimeout(r, 2000));
+            await listPage.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+            await new Promise((r) => setTimeout(r, 800));
           } else {
             this.logger.warn('Advanced mode: cookies.json not found or empty — falling back to guest scraping. Export your Google cookies to backend/cookies.json.');
           }
@@ -629,7 +649,16 @@ export class GoogleMapsScraperService {
             }
           });
           await new Promise((r) => setTimeout(r, 500));
+          await new Promise((r) => setTimeout(r, 500));
         } catch { }
+
+        // Wait for the actual result cards or a detail page title to render.
+        // We do NOT wait for generic containers like .m6QErb or div[role="feed"] as they appear before data is fetched.
+        try {
+          await listPage.waitForSelector('div.Nv2PK, div[role="article"], h1.DUwDvf', { timeout: 15000 });
+        } catch (e) {
+          this.logger.warn(`Timeout waiting for list cards to render: ${e.message}`);
+        }
 
         this.logger.log('Scrolling list to load all results...');
         await listPage.evaluate(async (targetCount: number) => {
@@ -637,10 +666,14 @@ export class GoogleMapsScraperService {
           if (!feed) return;
           let lastCount = 0;
           let noChangeRounds = 0;
-          const maxRounds = Math.max(Math.ceil(targetCount / 2), 60);
+          const maxRounds = Math.max(Math.ceil(targetCount / 2), 100);
+          
+          // Initial wait to ensure first render is fully complete before scrolling
+          await new Promise(r => setTimeout(r, 1000));
+
           for (let round = 0; round < maxRounds; round++) {
-            feed.scrollBy(0, 1500);
-            await new Promise((r) => setTimeout(r, 600));
+            feed.scrollBy(0, 2000);
+            await new Promise((r) => setTimeout(r, 250));
             const endEl = document.querySelector('.HlvSq, [jsaction*="pane.resultend"]');
             if (endEl) break;
             const currentCount = document.querySelectorAll('div.Nv2PK, div[role="article"]').length;
@@ -650,9 +683,45 @@ export class GoogleMapsScraperService {
           }
         }, limit);
 
+
         await new Promise((r) => setTimeout(r, 1000));
 
         const cardData = await listPage.evaluate((userLat: number, userLng: number) => {
+          // If Google Maps directly navigated to a detail page (exact match redirect), handle it.
+          const detailTitle = document.querySelector('h1.DUwDvf');
+          if (detailTitle && detailTitle.textContent) {
+            const name = detailTitle.textContent.trim();
+            const href = window.location.href;
+            let itemLat = userLat, itemLng = userLng;
+            const coordMatch = href.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+            if (coordMatch) { itemLat = parseFloat(coordMatch[1]); itemLng = parseFloat(coordMatch[2]); }
+
+            let rating: number | undefined;
+            const ratingEl = document.querySelector('div.F7nice span[aria-hidden="true"]');
+            if (ratingEl) rating = parseFloat(ratingEl.textContent || '');
+
+            let userRatingCount: number | undefined;
+            const countEl = document.querySelector('div.F7nice span[aria-label*="reviews"]');
+            if (countEl) { const t = (countEl.textContent || '').replace(/[^0-9]/g, ''); if (t) userRatingCount = parseInt(t, 10); }
+            
+            const categoryEl = document.querySelector('button.DkEaL');
+            const categoryText = categoryEl?.textContent?.trim() || 'Restaurant';
+
+            return [{
+              id: 'gmap-' + Math.random().toString(36).substr(2, 9),
+              name,
+              detailUrl: href,
+              location: { latitude: itemLat, longitude: itemLng },
+              rating, userRatingCount,
+              googleMapsUri: href,
+              priceLevel: undefined,
+              cuisine: categoryText,
+              cuisineTypes: [categoryText],
+              placeType: 'Restaurant',
+              images: []
+            }];
+          }
+
           const cards = Array.from(document.querySelectorAll('div.Nv2PK, div[role="article"]'));
           const list: any[] = [];
           cards.forEach((card) => {
@@ -731,6 +800,7 @@ export class GoogleMapsScraperService {
           Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
           (window as any).chrome = { runtime: {} };
         });
+        // Track listPage so we can close it after
 
         const toProcess = cardData.slice(0, limit);
 
@@ -829,15 +899,17 @@ export class GoogleMapsScraperService {
           }
         } // end if/else basic vs intermediate/advanced
 
-        await detailPage.close();
+        await detailPage.close().catch(() => {});
+        await listPage.close().catch(() => {});
       } catch (pageErr: any) {
         this.logger.warn('Google Maps scrape pass failed: ' + pageErr.message);
       }
 
       results.sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
     } finally {
-      this.isScrapingBusy = false;
-      if (browser) await browser.close().catch(() => { });
+      this.activeSlots = Math.max(0, this.activeSlots - 1);
+      // Don't close sharedBrowser here — it's reused across scrapes
+      // Only close the individual pages that were opened
     }
 
     this.logger.log('Google Maps scraper returning ' + results.length + ' restaurants');
@@ -850,12 +922,13 @@ export class GoogleMapsScraperService {
     limit: number = 10,
     mode: ScrapingMode = 'intermediate',
     skipAdvancedKeys: Set<string> = new Set(),
+    targetName?: string,
   ): Promise<ScrapedRestaurant[]> {
-    this.logger.log(`Starting multi-engine search [mode=${mode}] for Lat: ${latitude}, Lng: ${longitude}, Limit: ${limit}`);
+    this.logger.log(`Starting multi-engine search [mode=${mode}] for Lat: ${latitude}, Lng: ${longitude}, Limit: ${limit}${targetName ? ` [Target: ${targetName}]` : ''}`);
 
     // Basic mode: only use Google Maps list-page (fast, no OSM/Nominatim detail scraping)
     if (mode === 'basic') {
-      const gmapResults = await this.scrapeGoogleMaps(latitude, longitude, limit, 'basic', skipAdvancedKeys).catch(() => []);
+      const gmapResults = await this.scrapeGoogleMaps(latitude, longitude, limit, 'basic', skipAdvancedKeys, targetName).catch(() => []);
       const uniqueMap = new Map<string, ScrapedRestaurant>();
       gmapResults.forEach((item) => {
         const key = item.name.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -871,8 +944,9 @@ export class GoogleMapsScraperService {
     const [osmResults, nomResults, gmapResults] = await Promise.all([
       this.fetchOsmRestaurants(latitude, longitude, 10000, limit).catch(() => []),
       this.fetchNominatimRestaurants(latitude, longitude, limit).catch(() => []),
-      this.scrapeGoogleMaps(latitude, longitude, limit, mode, skipAdvancedKeys).catch(() => []),
+      this.scrapeGoogleMaps(latitude, longitude, limit, mode, skipAdvancedKeys, targetName).catch(() => []),
     ]);
+
     const combined = [...gmapResults, ...nomResults, ...osmResults];
     const uniqueMap = new Map<string, ScrapedRestaurant>();
     combined.forEach((item) => {
