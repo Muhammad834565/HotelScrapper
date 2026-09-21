@@ -255,6 +255,15 @@ export async function adminUpgradeScraping(targetLevel: 'intermediate' | 'advanc
   return res.json();
 }
 
+export async function adminUpgradeSingleScraping(id: string, targetLevel: 'intermediate' | 'advanced'): Promise<{ success: boolean; message: string }> {
+  const res = await authFetch(`${API_BASE_URL}/restaurants/admin/${id}/upgrade-scraping`, {
+    method: 'POST',
+    body: JSON.stringify({ targetLevel }),
+  });
+  if (!res.ok) throw new Error(`Single upgrade scraping failed: ${res.status}`);
+  return res.json();
+}
+
 export async function adminMergeCities(fromCity: string, toCity: string): Promise<{ updated: number }> {
   const res = await authFetch(`${API_BASE_URL}/restaurants/admin/merge-cities`, {
     method: 'POST',

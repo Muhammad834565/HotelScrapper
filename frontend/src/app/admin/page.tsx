@@ -13,7 +13,7 @@ import {
   Restaurant, AdminStats, AdminListResponse, ScrapingMode,
   adminGetStats, adminGetAll, adminAddRestaurant, adminEditRestaurant,
   adminDeleteRestaurant, adminResolveCities, adminUpgradeScraping, adminDeduplicate,
-  adminGetCities, getAuthToken, removeAuthToken, adminMergeCities,
+  adminGetCities, getAuthToken, removeAuthToken, adminMergeCities, adminUpgradeSingleScraping,
 } from '../../lib/api';
 
 const PAGE_SIZE = 50;
@@ -38,13 +38,81 @@ const LEVEL_STYLES: Record<ScrapingMode, { label: string; classes: string; icon:
   },
 };
 
-function ScrapingBadge({ level }: { level?: ScrapingMode }) {
-  const info = LEVEL_STYLES[(level || 'basic') as ScrapingMode];
+function ScrapingBadge({
+  level,
+  restaurantId,
+  onUpdated,
+  showToast,
+}: {
+  level?: ScrapingMode;
+  restaurantId?: string;
+  onUpdated?: () => void;
+  showToast?: (msg: string, type?: 'success' | 'error') => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const currentLevel = (level || 'basic') as ScrapingMode;
+  const info = LEVEL_STYLES[currentLevel];
+
+  const handleUpgrade = async (targetLevel: 'intermediate' | 'advanced') => {
+    if (!restaurantId) return;
+    setLoading(true);
+    setOpen(false);
+    try {
+      const res = await adminUpgradeSingleScraping(restaurantId, targetLevel);
+      if (res.success) {
+        showToast?.(`Upgraded restaurant to ${targetLevel} level!`, 'success');
+        onUpdated?.();
+      } else {
+        showToast?.(res.message || 'Upgrade failed', 'error');
+      }
+    } catch (err: any) {
+      showToast?.(err.message || 'Failed to upgrade restaurant', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${info.classes}`}>
-      {info.icon}
-      {info.label}
-    </span>
+    <div className="relative inline-block text-left">
+      <button
+        disabled={loading || !restaurantId || currentLevel === 'advanced'}
+        onClick={() => setOpen(!open)}
+        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border transition-all ${info.classes} ${
+          restaurantId && currentLevel !== 'advanced' ? 'hover:scale-105 cursor-pointer shadow-sm' : ''
+        }`}
+      >
+        {loading ? <Loader2 className="w-3 h-3 animate-spin text-amber-400" /> : info.icon}
+        <span>{info.label}</span>
+        {restaurantId && currentLevel !== 'advanced' && !loading && (
+          <span className="text-[8px] opacity-70 ml-0.5">▼</span>
+        )}
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 mt-1 w-40 bg-gray-900 border border-white/10 rounded-xl shadow-xl z-50 overflow-hidden py-1 backdrop-blur-md">
+            {currentLevel === 'basic' && (
+              <button
+                onClick={() => handleUpgrade('intermediate')}
+                className="w-full text-left px-3 py-1.5 text-xs text-sky-400 hover:bg-sky-500/10 flex items-center gap-1.5 font-medium transition-colors"
+              >
+                <Star className="w-3 h-3" /> Upgrade Intermediate
+              </button>
+            )}
+            {(currentLevel === 'basic' || currentLevel === 'intermediate') && (
+              <button
+                onClick={() => handleUpgrade('advanced')}
+                className="w-full text-left px-3 py-1.5 text-xs text-purple-400 hover:bg-purple-500/10 flex items-center gap-1.5 font-medium transition-colors"
+              >
+                <Lock className="w-3 h-3" /> Upgrade Advanced
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -1122,7 +1190,12 @@ export default function AdminPage() {
                     </td>
                     <td className="px-4 py-3 text-gray-300">{r.cuisine || '—'}</td>
                     <td className="px-4 py-3">
-                      <ScrapingBadge level={r.scrapingLevel} />
+                      <ScrapingBadge
+                        level={r.scrapingLevel}
+                        restaurantId={r.id}
+                        onUpdated={() => loadList(page, search)}
+                        showToast={showToast}
+                      />
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5 opacity-90 group-hover:opacity-100 transition-opacity">
