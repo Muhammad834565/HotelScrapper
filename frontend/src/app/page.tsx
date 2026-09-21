@@ -151,9 +151,7 @@ export default function Home() {
     handleSearch(lat, lng);
   };
 
-  useEffect(() => {
-    handleSearch(location.latitude, location.longitude);
-  }, []);
+  // Note: Auto-search on page load disabled per requirement — search only starts when Search button is clicked.
 
   const activeModeInfo = SCRAPING_MODES.find(m => m.mode === scrapingMode)!;
 

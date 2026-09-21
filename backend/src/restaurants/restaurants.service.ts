@@ -59,10 +59,28 @@ export class RestaurantsService {
     return Math.round(R * c * 100) / 100;
   }
 
+  /** Get keys for restaurants that are ALREADY scraped at 'advanced' level */
+  private async getAdvancedKeys(): Promise<Set<string>> {
+    try {
+      const advancedRecords = await this.restaurantRepository.find({
+        where: { scrapingLevel: 'advanced' },
+      });
+      const keys = new Set<string>();
+      for (const r of advancedRecords) {
+        if (r.googleMapsUri) keys.add(r.googleMapsUri);
+        if (r.normalizedName) keys.add(r.normalizedName);
+        if (r.name) keys.add(r.name.toLowerCase().replace(/[^a-z0-9]/g, ''));
+      }
+      return keys;
+    } catch {
+      return new Set<string>();
+    }
+  }
+
   /**
    * Helper to clean city and postalCode:
-   * If `city` contains a postal code (digits-only or pattern), move it to `postalCode`
-   * and attempt to extract real city name from address.
+   * If `city` contains a postal code, move it to `postalCode`
+   * and extract real city name from address.
    */
   private cleanCityAndPostalCode(item: { city?: string; postalCode?: string; address?: string }): { city?: string; postalCode?: string } {
     let city = item.city?.trim();
@@ -74,7 +92,7 @@ export class RestaurantsService {
 
     if (city && isPostalCodePattern(city)) {
       if (!postalCode) postalCode = city;
-      city = undefined; // clear invalid city
+      city = undefined;
     }
 
     if (!city && address) {
@@ -125,11 +143,12 @@ export class RestaurantsService {
   }
 
   /**
-   * Fast DB lookup first:
-   * Max 30 items per request for search screens.
+   * Fast DB lookup first.
+   * If cached DB results count >= requested limit, return DB results.
+   * Otherwise execute live scraping to fetch requested limit.
    */
   async findNearestRestaurants(dto: SearchLocationDto): Promise<{ restaurants: RestaurantItem[]; source: string }> {
-    const limit = Math.min(dto.limit || 10, 1000); // Allow up to 1000 items
+    const limit = Math.min(dto.limit || 10, 1000);
     const radiusKm = (dto.radius || 5000) / 1000;
     const latDelta = radiusKm / 111;
     const lngDelta = radiusKm / (111 * Math.cos((dto.latitude * Math.PI) / 180));
@@ -153,7 +172,7 @@ export class RestaurantsService {
     }
 
     if (dbRestaurants.length >= limit) {
-      this.logger.log(`⚡ Instant response: Found ${dbRestaurants.length} cached restaurants in PostgreSQL database (>= requested ${limit}).`);
+      this.logger.log(`⚡ Instant response: Found ${dbRestaurants.length} cached restaurants in PostgreSQL (>= requested ${limit}).`);
       const mapped = dbRestaurants.map((res) => this.entityToItem(res, dto.latitude, dto.longitude));
 
       const uniqueMapped: RestaurantItem[] = [];
@@ -169,19 +188,18 @@ export class RestaurantsService {
       uniqueMapped.sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
       const topResults = uniqueMapped.slice(0, limit);
 
-      // Trigger non-blocking background refresh/scrape to find any new restaurants
       this.saveAndScrapeInBackground(dto.latitude, dto.longitude, limit, mode);
-
       return { restaurants: topResults, source: 'postgresql_database' };
     }
 
-    // 2. If DB has no cached records for this location, execute live scraping
-    this.logger.log(`🔍 No cached DB results for location (${dto.latitude}, ${dto.longitude}). Scraping live data [mode=${mode}]...`);
+    // 2. Execute live scraping for requested limit
+    this.logger.log(`🔍 Live scraping for location (${dto.latitude}, ${dto.longitude}) [limit=${limit}, mode=${mode}]...`);
     let restaurants: RestaurantItem[] = [];
     let source = `google_maps_puppeteer_scraper_${mode}`;
 
     try {
-      const scraped = await this.scraperService.scrapeNearestRestaurants(dto.latitude, dto.longitude, limit, mode);
+      const skipKeys = await this.getAdvancedKeys();
+      const scraped = await this.scraperService.scrapeNearestRestaurants(dto.latitude, dto.longitude, limit, mode, skipKeys);
       if (scraped && scraped.length > 0) {
         restaurants = scraped.map((s) => ({ ...s, scrapingLevel: mode }));
       }
@@ -212,8 +230,7 @@ export class RestaurantsService {
 
   /**
    * Upsert scraped restaurants into PostgreSQL `restaurants` table.
-   * Checks for duplicates using googleMapsUri, phone, or normalizedName.
-   * RULE: If existing record is already at 'advanced' level, DO NOT update or overwrite it if incoming mode is basic or intermediate.
+   * RULE: If existing record is already at 'advanced' level, DO NOT update or overwrite if incoming mode is basic or intermediate.
    */
   private async upsertRestaurantsToDatabase(items: RestaurantItem[], mode: ScrapingMode = 'basic'): Promise<void> {
     if (!items || items.length === 0) return;
@@ -228,7 +245,6 @@ export class RestaurantsService {
           address: item.address,
         });
 
-        // Find existing record
         let existing: RestaurantEntity | null = null;
 
         if (item.googleMapsUri && item.googleMapsUri.length > 10) {
@@ -256,7 +272,7 @@ export class RestaurantsService {
         }
 
         if (existing) {
-          // RULE: If existing record is already at 'advanced' level, DO NOT update or overwrite if incoming mode is basic or intermediate
+          // RULE: "once resturant are in advace donot scrabe again"
           if (existing.scrapingLevel === 'advanced' && mode !== 'advanced') {
             this.logger.log(`Protected: Record '${existing.name}' is already at 'advanced' level — skipping update from '${mode}' scan.`);
             continue;
@@ -331,7 +347,6 @@ export class RestaurantsService {
 
   /**
    * Deduplicate existing rows in PostgreSQL database.
-   * Merges duplicate entries with matching normalizedName or googleMapsUri.
    */
   async deduplicateDatabase(): Promise<{ merged: number; deleted: number }> {
     const all = await this.restaurantRepository.find();
@@ -349,7 +364,6 @@ export class RestaurantsService {
 
     for (const [, records] of groups) {
       if (records.length > 1) {
-        // Sort by scraping level descending so best record is primary
         records.sort((a, b) => (levelRank[b.scrapingLevel || 'basic'] || 1) - (levelRank[a.scrapingLevel || 'basic'] || 1));
         const primary = records[0];
 
@@ -381,7 +395,8 @@ export class RestaurantsService {
     setImmediate(async () => {
       try {
         this.logger.log(`🔄 Background refresh [mode=${mode}]: Checking for new restaurants near (${latitude}, ${longitude})...`);
-        const newScraped = await this.scraperService.scrapeNearestRestaurants(latitude, longitude, limit, mode);
+        const skipKeys = await this.getAdvancedKeys();
+        const newScraped = await this.scraperService.scrapeNearestRestaurants(latitude, longitude, limit, mode, skipKeys);
         if (newScraped && newScraped.length > 0) {
           await this.upsertRestaurantsToDatabase(newScraped.map((s) => ({ ...s, scrapingLevel: mode })), mode);
         }
@@ -458,7 +473,7 @@ export class RestaurantsService {
 
   /** Get all restaurants paginated for admin table (Max 50 per page) */
   async getAllRestaurants(page: number = 1, pageSize: number = 50): Promise<{ data: RestaurantItem[]; total: number; page: number; pageSize: number }> {
-    const effectivePageSize = Math.min(pageSize, 50); // Cap at 50 for admin
+    const effectivePageSize = Math.min(pageSize, 50);
     const [rows, total] = await this.restaurantRepository.findAndCount({
       order: { createdAt: 'DESC' },
       skip: (page - 1) * effectivePageSize,
@@ -565,8 +580,7 @@ export class RestaurantsService {
 
   /**
    * Resolve postal codes: for records where `city` is null/empty or looks like a
-   * postal code (digits-only / short alphanumeric), reverse-geocode via Nominatim
-   * and save the real city name. Also triggers database deduplication.
+   * postal code, reverse-geocode via Nominatim and save the real city name.
    */
   async resolvePostalCodeCities(): Promise<{ resolved: number; failed: number }> {
     const allRecords = await this.restaurantRepository.find();
@@ -605,17 +619,13 @@ export class RestaurantsService {
       }
     }
 
-    // Run deduplication after fixing cities
     await this.deduplicateDatabase();
-
     this.logger.log(`resolvePostalCodeCities: resolved=${resolved}, failed=${failed}`);
     return { resolved, failed };
   }
 
   /**
    * Upgrade scraping level for existing records:
-   * - 'intermediate': re-scrapes all 'basic' records at intermediate quality
-   * - 'advanced': re-scrapes all 'basic' and 'intermediate' records at advanced quality
    */
   async upgradeScrapingLevel(targetLevel: 'intermediate' | 'advanced'): Promise<{ queued: number }> {
     const levelsToUpgrade: string[] = targetLevel === 'advanced' ? ['basic', 'intermediate'] : ['basic'];
@@ -630,7 +640,8 @@ export class RestaurantsService {
       for (const record of records) {
         try {
           this.logger.log(`Re-scraping '${record.name}' at ${targetLevel} level...`);
-          const scraped = await this.scraperService.scrapeNearestRestaurants(record.latitude, record.longitude, 1, targetLevel);
+          const skipKeys = await this.getAdvancedKeys();
+          const scraped = await this.scraperService.scrapeNearestRestaurants(record.latitude, record.longitude, 1, targetLevel, skipKeys);
           if (scraped && scraped.length > 0) {
             await this.upsertRestaurantsToDatabase([{ ...scraped[0], id: record.id, scrapingLevel: targetLevel }], targetLevel);
           }

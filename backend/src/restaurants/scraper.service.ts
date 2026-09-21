@@ -36,6 +36,7 @@ export interface ScrapedRestaurant {
 @Injectable()
 export class GoogleMapsScraperService {
   private readonly logger = new Logger(GoogleMapsScraperService.name);
+  private isScrapingBusy = false;
 
   private calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
     const R = 6371;
@@ -513,7 +514,21 @@ export class GoogleMapsScraperService {
     }
   }
 
-  async scrapeGoogleMaps(latitude: number, longitude: number, limit: number = 50, mode: ScrapingMode = 'intermediate'): Promise<ScrapedRestaurant[]> {
+  async scrapeGoogleMaps(
+    latitude: number,
+    longitude: number,
+    limit: number = 50,
+    mode: ScrapingMode = 'intermediate',
+    skipAdvancedKeys: Set<string> = new Set(),
+  ): Promise<ScrapedRestaurant[]> {
+    if (this.isScrapingBusy) {
+      this.logger.log('Scraper busy with another request — waiting for previous scrape job...');
+      while (this.isScrapingBusy) {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+    this.isScrapingBusy = true;
+
     this.logger.log(`Launching Puppeteer [mode=${mode}] for Google Maps near Lat: ${latitude}, Lng: ${longitude}`);
     let browser: puppeteer.Browser | null = null;
     const results: ScrapedRestaurant[] = [];
@@ -743,7 +758,34 @@ export class GoogleMapsScraperService {
         } else {
           // ---- Intermediate / Advanced: visit each detail page ----
           for (const item of toProcess) {
-            if (results.some((r) => r.name.toLowerCase() === item.name.toLowerCase())) continue;
+            const normName = item.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+            if (results.some((r) => r.name.toLowerCase().replace(/[^a-z0-9]/g, '') === normName || (item.googleMapsUri && r.googleMapsUri === item.googleMapsUri))) {
+              this.logger.log(`Skipping duplicate restaurant in list: ${item.name}`);
+              continue;
+            }
+
+            // RULE: "once resturant are in advace donot scrabe again"
+            if (skipAdvancedKeys.has(item.googleMapsUri || '') || skipAdvancedKeys.has(normName)) {
+              this.logger.log(`🔒 Skip detail scrape for '${item.name}': already scraped at Advanced level in database.`);
+              results.push({
+                id: item.id,
+                name: item.name,
+                address: '',
+                location: item.location,
+                rating: item.rating,
+                userRatingCount: item.userRatingCount,
+                googleMapsUri: item.googleMapsUri,
+                priceLevel: item.priceLevel,
+                cuisine: item.cuisine,
+                cuisineTypes: item.cuisineTypes,
+                placeType: item.placeType,
+                images: item.images?.length ? item.images : [this.getCuisineImage(item.name, item.placeType, item.cuisineTypes) || ''].filter(Boolean),
+                distanceKm: this.calculateDistance(latitude, longitude, item.location.latitude, item.location.longitude),
+              });
+              continue;
+            }
+
             this.logger.log('Scraping detail page for: ' + item.name);
             const detail = await this.scrapeDetailPage(detailPage, item.detailUrl);
 
@@ -793,9 +835,8 @@ export class GoogleMapsScraperService {
       }
 
       results.sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
-    } catch (err: any) {
-      this.logger.warn('Google Maps Puppeteer scrape error: ' + err.message);
     } finally {
+      this.isScrapingBusy = false;
       if (browser) await browser.close().catch(() => { });
     }
 
@@ -803,12 +844,18 @@ export class GoogleMapsScraperService {
     return results;
   }
 
-  async scrapeNearestRestaurants(latitude: number, longitude: number, limit: number = 10, mode: ScrapingMode = 'intermediate'): Promise<ScrapedRestaurant[]> {
+  async scrapeNearestRestaurants(
+    latitude: number,
+    longitude: number,
+    limit: number = 10,
+    mode: ScrapingMode = 'intermediate',
+    skipAdvancedKeys: Set<string> = new Set(),
+  ): Promise<ScrapedRestaurant[]> {
     this.logger.log(`Starting multi-engine search [mode=${mode}] for Lat: ${latitude}, Lng: ${longitude}, Limit: ${limit}`);
 
     // Basic mode: only use Google Maps list-page (fast, no OSM/Nominatim detail scraping)
     if (mode === 'basic') {
-      const gmapResults = await this.scrapeGoogleMaps(latitude, longitude, limit, 'basic').catch(() => []);
+      const gmapResults = await this.scrapeGoogleMaps(latitude, longitude, limit, 'basic', skipAdvancedKeys).catch(() => []);
       const uniqueMap = new Map<string, ScrapedRestaurant>();
       gmapResults.forEach((item) => {
         const key = item.name.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -824,7 +871,7 @@ export class GoogleMapsScraperService {
     const [osmResults, nomResults, gmapResults] = await Promise.all([
       this.fetchOsmRestaurants(latitude, longitude, 10000, limit).catch(() => []),
       this.fetchNominatimRestaurants(latitude, longitude, limit).catch(() => []),
-      this.scrapeGoogleMaps(latitude, longitude, limit, mode).catch(() => []),
+      this.scrapeGoogleMaps(latitude, longitude, limit, mode, skipAdvancedKeys).catch(() => []),
     ]);
     const combined = [...gmapResults, ...nomResults, ...osmResults];
     const uniqueMap = new Map<string, ScrapedRestaurant>();
