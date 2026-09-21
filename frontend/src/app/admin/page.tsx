@@ -617,6 +617,7 @@ export default function AdminPage() {
   useEffect(() => {
     const token = getAuthToken();
     if (!token) {
+      removeAuthToken();
       router.push('/login');
     }
   }, [router]);

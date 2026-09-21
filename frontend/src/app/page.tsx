@@ -62,6 +62,7 @@ export default function Home() {
   useEffect(() => {
     const token = getAuthToken();
     if (!token) {
+      removeAuthToken();
       router.push('/login');
     }
   }, [router]);

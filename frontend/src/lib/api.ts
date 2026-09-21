@@ -65,12 +65,18 @@ export function getAuthToken(): string | null {
 export function setAuthToken(token: string) {
   if (typeof window !== 'undefined') {
     localStorage.setItem('auth_token', token);
+    document.cookie = `auth_token=${encodeURIComponent(token)}; path=/; max-age=86400; SameSite=Lax`;
   }
 }
 
 export function removeAuthToken() {
   if (typeof window !== 'undefined') {
     localStorage.removeItem('auth_token');
+    document.cookie.split(';').forEach((c) => {
+      const eqPos = c.indexOf('=');
+      const name = eqPos > -1 ? c.substring(0, eqPos).trim() : c.trim();
+      document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;`;
+    });
   }
 }
 
@@ -101,6 +107,13 @@ export async function loginUser(username: string, password: string): Promise<{ s
 }
 
 export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const token = getAuthToken();
+  if (!token && typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+    removeAuthToken();
+    window.location.href = '/login';
+    throw new Error('Authentication token missing. Redirecting to login.');
+  }
+
   const headers = { ...getAuthHeaders(), ...(options.headers || {}) };
   const res = await fetch(url, { ...options, headers });
   if (res.status === 401) {
