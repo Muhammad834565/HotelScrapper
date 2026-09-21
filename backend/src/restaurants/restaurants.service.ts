@@ -27,6 +27,9 @@ export interface RestaurantItem {
   openingHours?: string[];
   isOpenNow?: boolean;
   distanceKm?: number;
+  aboutSection?: Record<string, string[]>;
+  aboutKeywords?: string[];
+  menuData?: any[];
 }
 
 import { RestaurantEntity } from './entities/restaurant.entity';
@@ -88,29 +91,34 @@ export class RestaurantsService {
     if (dbRestaurants.length > 0) {
       this.logger.log(`⚡ Instant response: Found ${dbRestaurants.length} restaurants in PostgreSQL database.`);
 
-      const mapped: RestaurantItem[] = dbRestaurants.map((res) => ({
-        id: res.id,
-        name: res.name,
-        address: res.address || '',
-        city: res.city || '',
-        country: res.country || '',
-        postalCode: res.postalCode || '',
-        location: { latitude: res.latitude, longitude: res.longitude },
-        rating: res.rating || 4.5,
-        userRatingCount: res.userRatingCount || 50,
-        googleMapsUri: res.googleMapsUri || `https://www.google.com/maps/search/?api=1&query=${res.latitude},${res.longitude}`,
-        priceLevel: res.priceLevel || '$$',
-        cuisine: res.cuisine || 'Dining',
-        cuisineTypes: res.cuisineTypes || [],
-        placeType: res.placeType || 'Restaurant',
-        phone: res.phone || undefined,
-        email: res.email || undefined,
-        website: res.website || undefined,
-        images: res.images || [],
-        openingHours: res.openingHours || [],
-        isOpenNow: res.isOpenNow ?? true,
-        distanceKm: this.calculateDistance(dto.latitude, dto.longitude, res.latitude, res.longitude),
-      }));
+      const mapped: RestaurantItem[] = dbRestaurants.map((res) => {
+        return {
+          id: res.id,
+          name: res.name,
+          address: res.address || undefined,
+          city: res.city || undefined,
+          country: res.country || undefined,
+          postalCode: res.postalCode || undefined,
+          location: { latitude: res.latitude, longitude: res.longitude },
+          rating: res.rating ?? undefined,
+          userRatingCount: res.userRatingCount ?? undefined,
+          googleMapsUri: res.googleMapsUri || undefined,
+          priceLevel: res.priceLevel || undefined,
+          cuisine: res.cuisine || undefined,
+          cuisineTypes: res.cuisineTypes?.length ? res.cuisineTypes : undefined,
+          placeType: res.placeType || undefined,
+          phone: res.phone || undefined,
+          email: res.email || undefined,
+          website: res.website || undefined,
+          images: res.images?.length ? res.images : undefined,
+          openingHours: res.openingHours?.length ? res.openingHours : undefined,
+          isOpenNow: res.isOpenNow ?? undefined,
+          distanceKm: this.calculateDistance(dto.latitude, dto.longitude, res.latitude, res.longitude),
+          aboutSection: res.aboutSection || undefined,
+          aboutKeywords: res.aboutKeywords?.length ? res.aboutKeywords : undefined,
+          menuData: res.menuData?.length ? res.menuData : undefined,
+        };
+      });
 
       mapped.sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
       const topResults = mapped.slice(0, limit);
@@ -170,47 +178,59 @@ export class RestaurantsService {
         });
 
         if (existing) {
-          existing.name = item.name || existing.name;
-          existing.address = item.address || existing.address;
-          existing.city = item.city || existing.city;
-          existing.country = item.country || existing.country;
-          existing.latitude = item.location.latitude || existing.latitude;
-          existing.longitude = item.location.longitude || existing.longitude;
-          existing.rating = item.rating || existing.rating;
-          existing.userRatingCount = item.userRatingCount || existing.userRatingCount;
-          existing.googleMapsUri = item.googleMapsUri || existing.googleMapsUri;
-          existing.phone = item.phone || existing.phone;
-          existing.email = item.email || existing.email;
-          existing.website = item.website || existing.website;
-          existing.images = item.images && item.images.length > 0 ? item.images : existing.images;
-          existing.cuisine = item.cuisine || existing.cuisine;
-          existing.cuisineTypes = item.cuisineTypes || existing.cuisineTypes;
-          existing.placeType = item.placeType || existing.placeType;
+          // Only overwrite with new value if it is a real non-empty value
+          if (item.name) existing.name = item.name;
+          if (item.address && item.address.trim()) existing.address = item.address;
+          if (item.city && item.city.trim()) existing.city = item.city;
+          if (item.country && item.country.trim()) existing.country = item.country;
+          if (item.location.latitude) existing.latitude = item.location.latitude;
+          if (item.location.longitude) existing.longitude = item.location.longitude;
+          if (item.rating != null) existing.rating = item.rating;
+          if (item.userRatingCount != null) existing.userRatingCount = item.userRatingCount;
+          if (item.googleMapsUri) existing.googleMapsUri = item.googleMapsUri;
+          if (item.phone && item.phone.trim()) existing.phone = item.phone;
+          if (item.email && item.email.trim()) existing.email = item.email;
+          if (item.website && item.website.trim()) existing.website = item.website;
+          if (item.images && item.images.length > 0) existing.images = item.images;
+          if (item.openingHours && item.openingHours.length > 0) existing.openingHours = item.openingHours;
+          if (item.isOpenNow != null) existing.isOpenNow = item.isOpenNow;
+          if (item.cuisine && item.cuisine.trim()) existing.cuisine = item.cuisine;
+          if (item.cuisineTypes && item.cuisineTypes.length > 0) existing.cuisineTypes = item.cuisineTypes;
+          if (item.placeType && item.placeType.trim()) existing.placeType = item.placeType;
+          if (item.priceLevel && item.priceLevel.trim()) existing.priceLevel = item.priceLevel;
+          // Only overwrite About data if the new scrape actually found real categories
+          if (item.aboutSection && Object.keys(item.aboutSection).length > 0) existing.aboutSection = item.aboutSection;
+          if (item.aboutKeywords && item.aboutKeywords.length > 0) existing.aboutKeywords = item.aboutKeywords;
+          if (item.menuData && item.menuData.length > 0) existing.menuData = item.menuData;
           await this.restaurantRepository.save(existing);
         } else {
           const newRecord = this.restaurantRepository.create({
             id: item.id || `res-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
             normalizedName: normName,
             name: item.name,
-            address: item.address,
-            city: item.city,
-            country: item.country,
-            postalCode: item.postalCode,
+            address: item.address && item.address.trim() ? item.address : undefined,
+            city: item.city && item.city.trim() ? item.city : undefined,
+            country: item.country && item.country.trim() ? item.country : undefined,
+            postalCode: item.postalCode && item.postalCode.trim() ? item.postalCode : undefined,
             latitude: item.location.latitude,
             longitude: item.location.longitude,
-            rating: item.rating,
-            userRatingCount: item.userRatingCount,
-            googleMapsUri: item.googleMapsUri,
-            priceLevel: item.priceLevel,
-            cuisine: item.cuisine,
-            cuisineTypes: item.cuisineTypes,
-            placeType: item.placeType,
-            phone: item.phone,
-            email: item.email,
-            website: item.website,
-            images: item.images,
-            openingHours: item.openingHours,
-            isOpenNow: item.isOpenNow ?? true,
+            rating: item.rating ?? undefined,
+            userRatingCount: item.userRatingCount ?? undefined,
+            googleMapsUri: item.googleMapsUri || undefined,
+            priceLevel: item.priceLevel && item.priceLevel.trim() ? item.priceLevel : undefined,
+            cuisine: item.cuisine && item.cuisine.trim() ? item.cuisine : undefined,
+            cuisineTypes: item.cuisineTypes?.length ? item.cuisineTypes : undefined,
+            placeType: item.placeType && item.placeType.trim() ? item.placeType : undefined,
+            phone: item.phone && item.phone.trim() ? item.phone : undefined,
+            email: item.email && item.email.trim() ? item.email : undefined,
+            website: item.website && item.website.trim() ? item.website : undefined,
+            images: item.images?.length ? item.images : undefined,
+            openingHours: item.openingHours?.length ? item.openingHours : undefined,
+            // null = unknown, true/false = actual scraped status
+            isOpenNow: item.isOpenNow ?? null,
+            aboutSection: item.aboutSection && Object.keys(item.aboutSection).length > 0 ? item.aboutSection : undefined,
+            aboutKeywords: item.aboutKeywords?.length ? item.aboutKeywords : undefined,
+            menuData: item.menuData?.length ? item.menuData : undefined,
           });
           await this.restaurantRepository.save(newRecord);
         }

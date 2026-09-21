@@ -1,7 +1,6 @@
 import { Entity, PrimaryColumn, Column, CreateDateColumn, UpdateDateColumn, Index, Unique } from 'typeorm';
 
 @Entity('restaurants')
-@Unique(['latitude', 'longitude'])
 export class RestaurantEntity {
   @PrimaryColumn()
   id: string; // unique key (e.g. gmap-..., osm-..., nom-..., or normalized name)
@@ -69,8 +68,17 @@ export class RestaurantEntity {
   @Column('simple-array', { nullable: true })
   openingHours: string[];
 
-  @Column({ default: true })
-  isOpenNow: boolean;
+  @Column({ nullable: true, default: null })
+  isOpenNow: boolean | null;
+
+  @Column('simple-json', { nullable: true })
+  aboutSection: Record<string, string[]>;
+
+  @Column('simple-array', { nullable: true })
+  aboutKeywords: string[];
+
+  @Column('simple-json', { nullable: true })
+  menuData: any[];
 
   @CreateDateColumn()
   createdAt: Date;

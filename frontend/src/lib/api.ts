@@ -20,6 +20,8 @@ export interface Restaurant {
   openingHours?: string[];
   isOpenNow?: boolean;
   distanceKm?: number;
+  aboutSection?: Record<string, string[]>;
+  aboutKeywords?: string[];
 }
 
 export interface SearchNearbyResponse {

@@ -13,6 +13,7 @@ import {
   ChevronRight,
   CheckCircle,
   XCircle,
+  Check,
 } from 'lucide-react';
 import { Restaurant } from '../lib/api';
 import RestaurantDetailModal from './RestaurantDetailModal';
@@ -125,18 +126,23 @@ export default function RestaurantCard({ restaurant, rank, isSelected, onSelect 
             </div>
           </div>
 
-          {/* Cuisine Tags */}
-          {restaurant.cuisineTypes && restaurant.cuisineTypes.length > 0 && (
+          {/* About Keywords preview */}
+          {restaurant.aboutKeywords && restaurant.aboutKeywords.length > 0 && (
             <div className="flex flex-wrap gap-1">
-              {restaurant.cuisineTypes.slice(0, 3).map((c) => (
+              {restaurant.aboutKeywords.slice(0, 3).map((kw) => (
                 <span
-                  key={c}
-                  className="inline-flex items-center gap-0.5 text-[10px] font-medium px-2 py-0.5 rounded-md bg-emerald-950/50 border border-emerald-500/20 text-emerald-300"
+                  key={kw}
+                  className="inline-flex items-center gap-0.5 text-[9px] font-medium px-1.5 py-0.5 rounded bg-teal-950/40 border border-teal-500/20 text-teal-300"
                 >
-                  <Utensils className="w-2 h-2" />
-                  {c}
+                  <Check className="w-2 h-2 text-teal-400" />
+                  {kw}
                 </span>
               ))}
+              {restaurant.aboutKeywords.length > 3 && (
+                <span className="text-[9px] text-teal-400 font-semibold self-center">
+                  +{restaurant.aboutKeywords.length - 3} more
+                </span>
+              )}
             </div>
           )}
 

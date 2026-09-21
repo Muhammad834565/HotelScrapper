@@ -17,6 +17,9 @@ import {
   ChevronRight,
   CheckCircle,
   XCircle,
+  Check,
+  Info,
+  Tag,
 } from 'lucide-react';
 import { Restaurant } from '../lib/api';
 
@@ -37,6 +40,7 @@ const PLACE_TYPE_COLORS: Record<string, string> = {
 };
 
 export default function RestaurantDetailModal({ restaurant, rank, onClose }: RestaurantDetailModalProps) {
+  const [activeTab, setActiveTab] = useState<'overview' | 'about'>('overview');
   const [imgIdx, setImgIdx] = useState(0);
   const images = restaurant.images && restaurant.images.length > 0
     ? restaurant.images
@@ -145,170 +149,273 @@ export default function RestaurantDetailModal({ restaurant, rank, onClose }: Res
           </button>
         </div>
 
+        {/* Tab navigation matching Google Maps */}
+        <div className="flex border-b border-white/10 px-5 pt-2 bg-gray-900/50 gap-6">
+          <button
+            onClick={() => setActiveTab('overview')}
+            className={`py-2.5 text-xs font-extrabold uppercase tracking-wider relative transition-colors ${
+              activeTab === 'overview' ? 'text-emerald-400' : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            Overview
+            {activeTab === 'overview' && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-400 rounded-full" />
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab('about')}
+            className={`py-2.5 text-xs font-extrabold uppercase tracking-wider relative transition-colors flex items-center gap-1.5 ${
+              activeTab === 'about' ? 'text-teal-400' : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            About
+            {restaurant.aboutKeywords && restaurant.aboutKeywords.length > 0 && (
+              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/40">
+                {restaurant.aboutKeywords.length}
+              </span>
+            )}
+            {activeTab === 'about' && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-teal-400 rounded-full" />
+            )}
+          </button>
+        </div>
+
         {/* Content body */}
         <div className="p-5 space-y-5">
-
-          {/* Rating + Distance + Price Row */}
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-xl">
-              <Star className="w-4 h-4 text-amber-400 fill-amber-400" />
-              <span className="text-sm font-bold text-amber-300">{restaurant.rating || 4.5}</span>
-              <span className="text-xs text-gray-400">({(restaurant.userRatingCount || 0).toLocaleString()} reviews)</span>
-            </div>
-            {restaurant.distanceKm !== undefined && (
-              <div className="flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-xl">
-                <Navigation className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-xs font-bold text-emerald-300">{restaurant.distanceKm} km away</span>
-              </div>
-            )}
-            {restaurant.priceLevel && (
-              <div className="flex items-center gap-1.5 bg-gray-800 border border-white/10 px-3 py-1.5 rounded-xl">
-                <span className="text-xs font-bold text-gray-300">{restaurant.priceLevel}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Cuisine Tags */}
-          {restaurant.cuisineTypes && restaurant.cuisineTypes.length > 0 && (
-            <div>
-              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                <Utensils className="w-3 h-3" /> Cuisine & Specialities
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {restaurant.cuisineTypes.map((c) => (
-                  <span
-                    key={c}
-                    className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-emerald-300"
-                  >
-                    {c}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="h-px bg-white/5" />
-
-          {/* Location */}
-          <div>
-            <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-              <MapPin className="w-3 h-3" /> Location
-            </p>
-            <div className="space-y-1.5 text-sm text-gray-300">
-              <p className="leading-snug">{restaurant.address}</p>
-              {(restaurant.city || restaurant.country) && (
-                <p className="text-gray-400 text-xs">
-                  {[restaurant.city, restaurant.country, restaurant.postalCode].filter(Boolean).join(', ')}
-                </p>
-              )}
-              <p className="text-gray-500 text-[11px]">
-                {restaurant.location.latitude.toFixed(6)}, {restaurant.location.longitude.toFixed(6)}
-              </p>
-            </div>
-          </div>
-
-          <div className="h-px bg-white/5" />
-
-          {/* Contact Info */}
-          <div>
-            <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-              Contact Information
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {restaurant.phone && (
-                <a
-                  href={`tel:${restaurant.phone}`}
-                  className="flex items-center gap-2.5 p-2.5 rounded-xl bg-gray-900 border border-white/10 hover:border-emerald-500/40 hover:bg-gray-800 transition-all group"
-                >
-                  <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center shrink-0 group-hover:bg-emerald-500/20 transition-colors">
-                    <Phone className="w-3.5 h-3.5 text-emerald-400" />
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-gray-500 uppercase tracking-wider">Phone</p>
-                    <p className="text-xs font-semibold text-gray-200">{restaurant.phone}</p>
-                  </div>
-                </a>
-              )}
-              {restaurant.email && (
-                <a
-                  href={`mailto:${restaurant.email}`}
-                  className="flex items-center gap-2.5 p-2.5 rounded-xl bg-gray-900 border border-white/10 hover:border-sky-500/40 hover:bg-gray-800 transition-all group"
-                >
-                  <div className="w-8 h-8 rounded-lg bg-sky-500/10 flex items-center justify-center shrink-0 group-hover:bg-sky-500/20 transition-colors">
-                    <Mail className="w-3.5 h-3.5 text-sky-400" />
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-gray-500 uppercase tracking-wider">Email</p>
-                    <p className="text-xs font-semibold text-gray-200 truncate max-w-[160px]">{restaurant.email}</p>
-                  </div>
-                </a>
-              )}
-              {restaurant.website && (
-                <a
-                  href={restaurant.website}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2.5 p-2.5 rounded-xl bg-gray-900 border border-white/10 hover:border-violet-500/40 hover:bg-gray-800 transition-all group"
-                >
-                  <div className="w-8 h-8 rounded-lg bg-violet-500/10 flex items-center justify-center shrink-0 group-hover:bg-violet-500/20 transition-colors">
-                    <Globe className="w-3.5 h-3.5 text-violet-400" />
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-gray-500 uppercase tracking-wider">Website</p>
-                    <p className="text-xs font-semibold text-gray-200 truncate max-w-[160px]">
-                      {restaurant.website.replace(/^https?:\/\//, '')}
-                    </p>
-                  </div>
-                </a>
-              )}
-              <a
-                href={mapsUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2.5 p-2.5 rounded-xl bg-gray-900 border border-white/10 hover:border-amber-500/40 hover:bg-gray-800 transition-all group"
-              >
-                <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center shrink-0 group-hover:bg-amber-500/20 transition-colors">
-                  <MapPin className="w-3.5 h-3.5 text-amber-400" />
-                </div>
-                <div>
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">Google Maps</p>
-                  <p className="text-xs font-semibold text-amber-300">Open in Maps</p>
-                </div>
-              </a>
-            </div>
-          </div>
-
-          {/* Opening Hours */}
-          {restaurant.openingHours && restaurant.openingHours.length > 0 && (
+          {activeTab === 'overview' ? (
             <>
+              {/* Rating + Distance + Price Row */}
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-xl">
+                  <Star className="w-4 h-4 text-amber-400 fill-amber-400" />
+                  <span className="text-sm font-bold text-amber-300">{restaurant.rating || 4.5}</span>
+                  <span className="text-xs text-gray-400">({(restaurant.userRatingCount || 0).toLocaleString()} reviews)</span>
+                </div>
+                {restaurant.distanceKm !== undefined && (
+                  <div className="flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-xl">
+                    <Navigation className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-xs font-bold text-emerald-300">{restaurant.distanceKm} km away</span>
+                  </div>
+                )}
+                {restaurant.priceLevel && (
+                  <div className="flex items-center gap-1.5 bg-gray-800 border border-white/10 px-3 py-1.5 rounded-xl">
+                    <span className="text-xs font-bold text-gray-300">{restaurant.priceLevel}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Cuisine Tags */}
+              {restaurant.cuisineTypes && restaurant.cuisineTypes.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                    <Utensils className="w-3 h-3" /> Cuisine & Specialities
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {restaurant.cuisineTypes.map((c) => (
+                      <span
+                        key={c}
+                        className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-emerald-300"
+                      >
+                        {c}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="h-px bg-white/5" />
+
+              {/* Location */}
+              <div>
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <MapPin className="w-3 h-3" /> Location
+                </p>
+                <div className="space-y-1.5 text-sm text-gray-300">
+                  <p className="leading-snug">{restaurant.address}</p>
+                  {(restaurant.city || restaurant.country) && (
+                    <p className="text-gray-400 text-xs">
+                      {[restaurant.city, restaurant.country, restaurant.postalCode].filter(Boolean).join(', ')}
+                    </p>
+                  )}
+                  <p className="text-gray-500 text-[11px]">
+                    {restaurant.location.latitude.toFixed(6)}, {restaurant.location.longitude.toFixed(6)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="h-px bg-white/5" />
+
+              {/* Contact Info */}
               <div>
                 <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                  <Clock className="w-3 h-3" /> Weekly Opening Hours
+                  Contact Information
                 </p>
-                <div className="space-y-1.5">
-                  {restaurant.openingHours.map((line) => {
-                    const [day, hours] = line.split(': ');
-                    const isToday = day === today;
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {restaurant.phone && (
+                    <a
+                      href={`tel:${restaurant.phone}`}
+                      className="flex items-center gap-2.5 p-2.5 rounded-xl bg-gray-900 border border-white/10 hover:border-emerald-500/40 hover:bg-gray-800 transition-all group"
+                    >
+                      <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center shrink-0 group-hover:bg-emerald-500/20 transition-colors">
+                        <Phone className="w-3.5 h-3.5 text-emerald-400" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wider">Phone</p>
+                        <p className="text-xs font-semibold text-gray-200">{restaurant.phone}</p>
+                      </div>
+                    </a>
+                  )}
+                  {restaurant.email && (
+                    <a
+                      href={`mailto:${restaurant.email}`}
+                      className="flex items-center gap-2.5 p-2.5 rounded-xl bg-gray-900 border border-white/10 hover:border-sky-500/40 hover:bg-gray-800 transition-all group"
+                    >
+                      <div className="w-8 h-8 rounded-lg bg-sky-500/10 flex items-center justify-center shrink-0 group-hover:bg-sky-500/20 transition-colors">
+                        <Mail className="w-3.5 h-3.5 text-sky-400" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wider">Email</p>
+                        <p className="text-xs font-semibold text-gray-200 truncate max-w-[160px]">{restaurant.email}</p>
+                      </div>
+                    </a>
+                  )}
+                  {restaurant.website && (
+                    <a
+                      href={restaurant.website}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2.5 p-2.5 rounded-xl bg-gray-900 border border-white/10 hover:border-violet-500/40 hover:bg-gray-800 transition-all group"
+                    >
+                      <div className="w-8 h-8 rounded-lg bg-violet-500/10 flex items-center justify-center shrink-0 group-hover:bg-violet-500/20 transition-colors">
+                        <Globe className="w-3.5 h-3.5 text-violet-400" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wider">Website</p>
+                        <p className="text-xs font-semibold text-gray-200 truncate max-w-[160px]">
+                          {restaurant.website.replace(/^https?:\/\//, '')}
+                        </p>
+                      </div>
+                    </a>
+                  )}
+                  <a
+                    href={mapsUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2.5 p-2.5 rounded-xl bg-gray-900 border border-white/10 hover:border-amber-500/40 hover:bg-gray-800 transition-all group"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center shrink-0 group-hover:bg-amber-500/20 transition-colors">
+                      <MapPin className="w-3.5 h-3.5 text-amber-400" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-gray-500 uppercase tracking-wider">Google Maps</p>
+                      <p className="text-xs font-semibold text-amber-300">Open in Maps</p>
+                    </div>
+                  </a>
+                </div>
+              </div>
+
+              {/* Opening Hours */}
+              {restaurant.openingHours && restaurant.openingHours.length > 0 && (
+                <>
+                  <div className="h-px bg-white/5" />
+                  <div>
+                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                      <Clock className="w-3 h-3" /> Weekly Opening Hours
+                    </p>
+                    <div className="space-y-1.5">
+                      {restaurant.openingHours.map((line) => {
+                        const [day, hours] = line.split(': ');
+                        const isToday = day === today;
+                        return (
+                          <div
+                            key={day}
+                            className={`flex items-center justify-between text-xs rounded-lg px-3 py-1.5 ${
+                              isToday
+                                ? 'bg-emerald-950/60 border border-emerald-500/30 text-emerald-300'
+                                : 'text-gray-400'
+                            }`}
+                          >
+                            <span className={`font-semibold w-24 ${isToday ? 'text-emerald-300' : 'text-gray-300'}`}>
+                              {day} {isToday && <span className="text-[10px] ml-1 font-bold opacity-70">Today</span>}
+                            </span>
+                            <span>{hours || line}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+            </>
+          ) : (
+            /* ABOUT TAB CONTENT (Google Maps structure) */
+            <div className="space-y-5">
+              <div className="flex items-center justify-between bg-teal-950/40 border border-teal-500/30 p-3.5 rounded-xl">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-teal-500/20 flex items-center justify-center text-teal-300 shrink-0">
+                    <Info className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-white">Google Maps About Section</h3>
+                    <p className="text-[11px] text-teal-300/80">Extracted restaurant attributes & service options</p>
+                  </div>
+                </div>
+                {restaurant.aboutKeywords && (
+                  <span className="text-xs font-extrabold px-2.5 py-1 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/40">
+                    {restaurant.aboutKeywords.length} Keywords
+                  </span>
+                )}
+              </div>
+
+              {/* Categorised Attribute Groups */}
+              {restaurant.aboutSection && Object.keys(restaurant.aboutSection).length > 0 && (
+                <div className="space-y-4">
+                  {Object.entries(restaurant.aboutSection).map(([category, tags]) => {
+                    if (!tags || tags.length === 0) return null;
                     return (
-                      <div
-                        key={day}
-                        className={`flex items-center justify-between text-xs rounded-lg px-3 py-1.5 ${
-                          isToday
-                            ? 'bg-emerald-950/60 border border-emerald-500/30 text-emerald-300'
-                            : 'text-gray-400'
-                        }`}
-                      >
-                        <span className={`font-semibold w-24 ${isToday ? 'text-emerald-300' : 'text-gray-300'}`}>
-                          {day} {isToday && <span className="text-[10px] ml-1 font-bold opacity-70">Today</span>}
-                        </span>
-                        <span>{hours || line}</span>
+                      <div key={category} className="bg-gray-900/60 border border-white/10 rounded-xl p-3.5 space-y-2">
+                        <h4 className="text-xs font-extrabold text-gray-200 tracking-wide flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-teal-400" />
+                          {category}
+                        </h4>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1">
+                          {tags.map((tag) => (
+                            <div
+                              key={tag}
+                              className="flex items-center gap-2 text-xs font-medium text-gray-200 bg-black/40 border border-white/5 px-2.5 py-1.5 rounded-lg"
+                            >
+                              <Check className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                              <span className="truncate">{tag}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
-              </div>
-            </>
+              )}
+
+              {/* All Keywords Tag Cloud */}
+              {restaurant.aboutKeywords && restaurant.aboutKeywords.length > 0 && (
+                <div className="bg-gray-900/60 border border-white/10 rounded-xl p-3.5 space-y-2.5">
+                  <div className="flex items-center gap-1.5 text-xs font-extrabold text-teal-300 uppercase tracking-wider">
+                    <Tag className="w-3.5 h-3.5" />
+                    All Scraped Keywords in About
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {restaurant.aboutKeywords.map((kw) => (
+                      <span
+                        key={kw}
+                        className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-teal-950/80 border border-teal-500/40 text-teal-200 hover:border-teal-400 transition-colors"
+                      >
+                        {kw}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
 
           {/* CTA Footer */}
