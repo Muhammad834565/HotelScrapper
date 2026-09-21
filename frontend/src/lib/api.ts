@@ -59,24 +59,19 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/a
 
 export function getAuthToken(): string | null {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem('auth_token');
+  const match = document.cookie.match(new RegExp('(^| )auth_token=([^;]+)'));
+  return match ? decodeURIComponent(match[2]) : null;
 }
 
 export function setAuthToken(token: string) {
   if (typeof window !== 'undefined') {
-    localStorage.setItem('auth_token', token);
     document.cookie = `auth_token=${encodeURIComponent(token)}; path=/; max-age=86400; SameSite=Lax`;
   }
 }
 
 export function removeAuthToken() {
   if (typeof window !== 'undefined') {
-    localStorage.removeItem('auth_token');
-    document.cookie.split(';').forEach((c) => {
-      const eqPos = c.indexOf('=');
-      const name = eqPos > -1 ? c.substring(0, eqPos).trim() : c.trim();
-      document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;`;
-    });
+    document.cookie = 'auth_token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax';
   }
 }
 
