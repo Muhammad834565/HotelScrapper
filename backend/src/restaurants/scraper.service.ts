@@ -593,63 +593,39 @@ export class GoogleMapsScraperService {
         await new Promise((r) => setTimeout(r, 1000));
 
 
-        // ---- Advanced mode: inject stored Google session cookies ----
+        // ---- Inject stored Google session cookies ONLY for advanced mode ----
         if (mode === 'advanced') {
           const cookies = this.loadGoogleCookies();
           if (cookies.length > 0) {
             await listPage.setCookie(...cookies);
             this.logger.log(`Advanced mode: injected ${cookies.length} Google session cookies.`);
-            // Reload with cookies active so Google recognises the session
             await listPage.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
-            await new Promise((r) => setTimeout(r, 800));
+            await new Promise((r) => setTimeout(r, 600));
           } else {
             this.logger.warn('Advanced mode: cookies.json not found or empty — falling back to guest scraping. Export your Google cookies to backend/cookies.json.');
           }
+        } else {
+          this.logger.log(`${mode} mode: running as guest (no cookies injected).`);
         }
 
-        // ---- Dismiss ALL blocking overlays: consent banner, cookie notice, sign-in prompt ----
+        // ---- Dismiss any blocking overlays in a single fast JS pass ----
         try {
-          // 1. GDPR / Cookie consent buttons (EU)
-          const consentSelectors = [
-            'button[aria-label*="Accept all"]',
-            'button[aria-label*="Accept"]',
-            'form[action*="consent"] button',
-            'button[jsname="higCR"]',  // Google consent "I agree"
-            '.VfPpkd-LgbsSe[jsname="b3VHJd"]', // another consent variant
-          ];
-          for (const sel of consentSelectors) {
-            try {
-              const btn = await listPage.$(sel);
-              if (btn) { await btn.click(); await new Promise((r) => setTimeout(r, 800)); break; }
-            } catch { }
-          }
-
-          // 2. Sign-in / "Use without an account" button
-          await new Promise((r) => setTimeout(r, 500));
-          const noSignInSelectors = [
-            'button[aria-label*="No thanks"]',
-            'button[aria-label*="Use without an account"]',
-            '[jsname="IVELnc"]',  // "Use without signing in" link/button
-            'a[href*="/maps/search"][jsname]', // skip sign-in anchor
-          ];
-          for (const sel of noSignInSelectors) {
-            try {
-              const btn = await listPage.$(sel);
-              if (btn) { await btn.click(); await new Promise((r) => setTimeout(r, 800)); break; }
-            } catch { }
-          }
-
-          // 3. Generic fallback: click any visible modal button that says "No thanks" / "Skip" / "Not now"
           await listPage.evaluate(() => {
-            const keywords = ['no thanks', 'skip', 'not now', 'use without', 'continue without'];
-            const buttons = Array.from(document.querySelectorAll('button, a[role="button"]')) as HTMLElement[];
-            for (const btn of buttons) {
-              const txt = (btn.textContent || '').toLowerCase().trim();
-              if (keywords.some(k => txt.includes(k))) { btn.click(); break; }
+            const selectors = [
+              'button[aria-label*="Accept all"]',
+              'button[aria-label*="Accept"]',
+              'form[action*="consent"] button',
+              'button[jsname="higCR"]',
+              '.VfPpkd-LgbsSe[jsname="b3VHJd"]',
+              'button[aria-label*="No thanks"]',
+              'button[aria-label*="Use without an account"]',
+              '[jsname="IVELnc"]',
+            ];
+            for (const sel of selectors) {
+              const btn = document.querySelector(sel) as HTMLElement;
+              if (btn) { btn.click(); break; }
             }
           });
-          await new Promise((r) => setTimeout(r, 500));
-          await new Promise((r) => setTimeout(r, 500));
         } catch { }
 
         // Wait for the actual result cards or a detail page title to render.
@@ -925,6 +901,12 @@ export class GoogleMapsScraperService {
     targetName?: string,
   ): Promise<ScrapedRestaurant[]> {
     this.logger.log(`Starting multi-engine search [mode=${mode}] for Lat: ${latitude}, Lng: ${longitude}, Limit: ${limit}${targetName ? ` [Target: ${targetName}]` : ''}`);
+
+    // Targeted single restaurant upgrade: skip general OSM/Nominatim area search and query Google Maps directly
+    if (targetName) {
+      this.logger.log(`Targeted search for '${targetName}' — querying Google Maps directly.`);
+      return await this.scrapeGoogleMaps(latitude, longitude, limit, mode, skipAdvancedKeys, targetName).catch(() => []);
+    }
 
     // Basic mode: only use Google Maps list-page (fast, no OSM/Nominatim detail scraping)
     if (mode === 'basic') {
